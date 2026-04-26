@@ -195,6 +195,26 @@ broken state and the wins are clearly attributable.
   transient axios failure on the summary service triggers up to 11
   recursive retries. Add a retry counter (max 2) and an explicit
   "service unavailable" path for the rest.
+- ☐ Remove the `cacheBuster` query-param suffix from upstream ESPN URLs
+  at [routes.js:412-414](../frontend/cfb/routes.js#L412),
+  [schedule.js:82](../frontend/cfb/schedule.js#L82), and
+  [schedule.js:132](../frontend/cfb/schedule.js#L132). The
+  `&${(new Date()).getTime() * 1000}` suffix defeats ESPN's CDN cache
+  on every request, costing ~400 ms even when our own Redis cache is
+  warm. ESPN's TTLs (1–5 min) are short enough that bypassing them is
+  unnecessary for current-status data. Confirmed via Day 1 instrumentation:
+  on a warm-cache game-page hit, `espn_pbp` was 441 ms because of this
+  cache buster; without it, expect ~30 ms.
+- ☐ Invert the cache-vs-ESPN order in the
+  [`/cfb/game/:gameId` handler](../frontend/cfb/routes.js#L409): try the
+  Redis-cached processed PBP first via `Games.getPBP`, derive game status
+  from `data.gameInfo.status.type.name`, and only fall back to a fresh
+  ESPN fetch when (a) the cache is empty, (b) the cached status is
+  in-progress and the cached payload is older than ~30 s (live game may
+  have transitioned), or (c) the route needs to render the pregame
+  template (cache doesn't apply for scheduled games). This drops
+  `espn_pbp` to 0 on warm hits for completed games — the common case
+  by far.
 - ☐ Set `maxmemory-policy allkeys-lru` (or `allkeys-lfu`) on
   [redis/cache.conf](../redis/cache.conf). Currently it has no eviction
   policy and returns OOM on overflow.
