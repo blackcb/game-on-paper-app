@@ -11,7 +11,9 @@
 <title><%= title %></title>
 <meta name="title" content="<%= title %>">
 <% } %>
+<% if (process.env.NODE_ENV === 'production') { %>
 <script defer data-domain="gameonpaper.com" src="https://plausible.io/js/script.js"></script>
-<%# Cloudflare Web Analytics — uncomment and paste site token from %>
-<%# https://dash.cloudflare.com/?to=/:account/web-analytics %>
-<%# <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "REPLACE_ME"}'></script> %>
+<%# Cloudflare Web Analytics — token is domain-locked to gameonpaper.com, %>
+<%# so it CORS-rejects from localhost. Production-only. %>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "bb368fa6ad0d4e43a3aae07f9bcc4c20"}'></script>
+<% } %>
