@@ -14,23 +14,31 @@ Deploy: GH Actions → SCP `docker-compose.do.yml` → SSH `docker compose up -d
 
 ## Active work
 
-Two parallel plans live under `docs/`. Both use the same resume convention:
+Three parallel plans live under `docs/`. All use the same resume convention:
 checkboxes (`☐`/`☑`), per-section Status block at the top, per-section Notes
-subsection for decisions.
+subsection for decisions, `> USER ACTION:` and destructive-step gates honored
+even in autopilot.
 
+- **[docs/replica-deploy-plan.md](docs/replica-deploy-plan.md)** —
+  Multi-phase plan to stand up `sports.unseen-university.org` as a parallel
+  testing environment (DigitalOcean droplet + Cloudflare DNS/TLS + GitHub
+  Actions CI/CD on the fork). **Prerequisite for perf-plan tasks 9–10 and
+  for migration-plan Phase 0+** — until this is done, neither plan can
+  collect meaningful before/after numbers. When asked to "continue the
+  replica deploy", find the first unchecked task in the next
+  not-completed phase.
 - **[docs/perf-plan.md](docs/perf-plan.md)** — 5-day plan to add baseline
-  observability, tests, and CI gates. **Do this first.** When asked to
-  "continue the perf plan", read the file, find the first unchecked task in
-  the next not-completed day, and pick up there.
+  observability, tests, and CI gates. Day 1 code work is complete; tasks
+  9–10 (deploy, capture baselines) are blocked on the replica plan. When
+  asked to "continue the perf plan", read the file and pick up at the
+  first unchecked task in the next not-completed day.
 - **[docs/migration-plan.md](docs/migration-plan.md)** — Multi-phase plan
   to migrate to Cloudflare (CDN → quick-win bug fixes → Worker rewrite →
-  Containers → optional ONNX port). When asked to "continue the migration",
-  do the same: find the first unchecked task in the next not-completed
-  phase. **Has explicit `> USER ACTION:` and destructive-step gates — do
-  not skip these.**
+  Containers → optional ONNX port). Phase 0 begins after the replica is
+  serving traffic. When asked to "continue the migration", same routine.
 
-If unsure which plan an ambiguous request maps to, ask. The perf plan is
-prerequisite reading for measuring migration impact.
+If unsure which plan an ambiguous request maps to, ask. Recommended order:
+replica deploy → perf-plan day 2+ in parallel with migration phase 0+.
 
 ## Conventions
 
