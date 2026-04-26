@@ -5,12 +5,12 @@ Cloudflare migration. Each day is independently shippable.
 
 ## Status
 
-- **Day 1 — Baseline observability**: not started
+- **Day 1 — Baseline observability**: in progress (code changes done; user-action items pending)
 - **Day 2 — Python snapshot tests**: not started
 - **Day 3 — Playwright E2E**: not started
 - **Day 4 — JSON Schema contract**: not started
 - **Day 5 — Lighthouse CI**: not started
-- Last updated: 2026-04-25
+- Last updated: 2026-04-26
 
 ## Resume hint for Claude Code
 
@@ -49,31 +49,43 @@ in the section above.
 
 ### Tasks
 
-- ☐ Wrap `/cfb/process` in [python/app.py](../python/app.py) with
+- ☑ Wrap `/cfb/process` in [python/app.py](../python/app.py) with
   `time.perf_counter()` around four stages: `espn_fetch` (the
   `espn_cfb_pbp()` call), `pipeline` (`run_processing_pipeline`),
   `box_score` (`create_box_score`), and `serialize` (the dict reshape +
   `jsonify`).
-- ☐ Set `Server-Timing: espn;dur=…, pipeline;dur=…, box_score;dur=…,
+- ☑ Set `Server-Timing: espn;dur=…, pipeline;dur=…, box_score;dur=…,
   serialize;dur=…` header on the response.
-- ☐ Emit one structured JSON log line per request with the same timings,
-  `gameId`, status code, and total duration. Use a dedicated logger so it can
-  be split out from access logs.
-- ☐ In [frontend/cfb/routes.js](../frontend/cfb/routes.js) and
+- ☑ Emit one structured JSON log line per request with the same timings,
+  `gameId`, status code, and total duration. Uses dedicated `app.metrics`
+  logger added to [python/flask_logs.py](../python/flask_logs.py) — emits
+  to stdout via the same `access` formatter, so JSON lines stay clean and
+  can be split out from access logs in production via stream redirection.
+- ☑ In [frontend/cfb/routes.js](../frontend/cfb/routes.js) and
   [frontend/cfb/games.js](../frontend/cfb/games.js), time the upstream axios
   calls (Python service, ESPN, summary service, Redis). Set `Server-Timing`
-  on the outbound response before `res.render` / `res.json`.
-- ☐ Replace `morgan`'s default text format in
+  on the outbound response before `res.render` / `res.json`. Implemented
+  via a small [frontend/cfb/timing.js](../frontend/cfb/timing.js) module:
+  `timingMiddleware()` wraps `res.render`/`json`/`send` to emit the
+  header, and `time(res, name, fn)` is called at every external-call site.
+  Stages timed: `espn_pbp`, `python`, `cache_lookup`, `cache_write`,
+  `summary`, `total`.
+- ☑ Replace `morgan`'s default text format in
   [frontend/server.js](../frontend/server.js) with a JSON formatter (custom
-  format string with all tokens + content-length + response-time).
+  function returning `JSON.stringify({...})` so quote escaping is safe).
 - ☐ Sign up for Cloudflare Web Analytics (free, no consent banner needed).
-  Get the site token.
-- ☐ Extract a shared `<head>` partial — there isn't one today; every EJS
+  Get the site token. **Once obtained, uncomment the script tag in
+  [frontend/views/partials/head.ejs](../frontend/views/partials/head.ejs)
+  and replace `REPLACE_ME` with the token.**
+- ☑ Extract a shared `<head>` partial — there isn't one today; every EJS
   page repeats `<head>` (e.g. [index.ejs:3-53](../frontend/views/pages/cfb/index.ejs)).
-  Create `frontend/views/partials/head.ejs` with the existing meta + favicon
-  + the Plausible snippet + the new Cloudflare Web Analytics snippet, accept
-  a `title` local. Replace the `<head>` block in all 12 page templates with
-  `<%- include('../../partials/head', { title: titleText }) %>`.
+  Created [frontend/views/partials/head.ejs](../frontend/views/partials/head.ejs)
+  covering the truly-common content (meta tags, favicon, title from local,
+  Plausible, placeholder for CF Web Analytics). All 12 page templates
+  + the top-level `error.ejs` now include it. CSS bundles intentionally
+  stay per-page because index.ejs uses a different bundle
+  (`index.css` + `dark-index.css`) than the others (`dashboard.css` +
+  `blog.css` + `dark-game.css` + `bootstrap-icons.css`).
 - ☐ Build and run the stack locally; verify `Server-Timing` shows up in
   DevTools → Network → headers for `/cfb/` and `/cfb/game/401403910`.
 - ☐ Deploy to prod. Wait 24h for CF Web Analytics to collect data.
@@ -92,7 +104,42 @@ in the section above.
 
 ### Notes
 
-_(fill in as you go)_
+- **Python**: per-stage timings live in
+  [python/app.py:38-71](../python/app.py) (the `_emit_metrics` and
+  `_server_timing_header` helpers plus four `time.perf_counter()` blocks
+  inside `process()`). Both success and error paths emit the metric line
+  and Server-Timing header so partial timings (e.g. ESPN fetched but
+  pipeline failed) are still visible.
+- **Node**: timing helper is
+  [frontend/cfb/timing.js](../frontend/cfb/timing.js). `timingMiddleware()`
+  is registered once in [frontend/server.js](../frontend/server.js) right
+  after morgan; it wraps `res.render`/`json`/`send` so the
+  `Server-Timing` header is set automatically before any response goes
+  out. Individual calls to `time(res, name, fn)` accumulate per-name
+  durations in `res.locals.timings`. The `time()` helper is safe when
+  `res` is undefined, so games.js can be called from non-HTTP contexts
+  without crashing.
+- **Pages timed today**: every route handler in `routes.js` that hits the
+  summary service is wrapped with `time(res, 'summary', () => ...)`.
+  The game page (`/cfb/game/:id`) additionally times `espn_pbp`,
+  `python`, `cache_lookup`, `cache_write`. Other peripheral redis reads
+  inside `Schedule` could be added later but aren't critical.
+- **Logs**: structured JSON metric lines go to stdout. In Docker logs
+  these will mix with other lines — tooling can filter by the `event`
+  field (`process` for Python, `request`/`access` for Node).
+- **CF Web Analytics**: snippet exists in
+  [frontend/views/partials/head.ejs](../frontend/views/partials/head.ejs)
+  but is commented out. Once the user has a token, uncomment the
+  script tag and replace `REPLACE_ME` with the token. Single edit in
+  one file rolls out site-wide.
+- **CSS bundle deduplication is deferred**: the head partial intentionally
+  excludes CSS links because the index page uses a different bundle than
+  every other page. Unifying the bundles is in Phase 1 of the migration
+  plan (asset cleanup).
+- **POST `/cfb/game/:gameId` handler bug** at routes.js:490
+  (`Games.getPBP(req, res)` instead of `Games.getPBP(req.params.gameId)`)
+  is **not fixed here** — that's tracked in Phase 1 of the migration plan
+  to keep this commit scoped to instrumentation.
 
 ---
 
