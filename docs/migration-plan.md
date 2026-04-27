@@ -183,6 +183,13 @@ broken state and the wins are clearly attributable.
   `req.get('User-Agent')?.toLocaleLowerCase()?.match(...)` (optional
   chaining + nullish handling). Or delete the middleware entirely once
   Phase 0 moved the rule to WAF.
+- ☐ Add `HEAD` to the allowed methods list in
+  [server.js:43-57](../frontend/server.js#L43): currently only `GET` and
+  `POST` pass; HEAD requests return 405. Standard HTTP clients (curl
+  `-I`, search bots, monitoring) use HEAD for cheap existence checks.
+  Either add `"HEAD"` to the allowlist, or drop the method-allowlist
+  middleware entirely (let Express's default 404 handle unknown
+  methods). Discovered while spot-checking Cloudflare proxy behavior.
 - ☐ Fix the broken POST handler at
   [frontend/cfb/routes.js:490](../frontend/cfb/routes.js): change
   `Games.getPBP(req, res)` → `Games.getPBP(req.params.gameId)`.
@@ -218,6 +225,22 @@ broken state and the wins are clearly attributable.
 - ☐ Set `maxmemory-policy allkeys-lru` (or `allkeys-lfu`) on
   [redis/cache.conf](../redis/cache.conf). Currently it has no eviction
   policy and returns OOM on overflow.
+- ☐ Fix the cache container's healthcheck in
+  [docker-compose.do.yml](../docker-compose.do.yml): currently
+  `redis-cli ping`, which defaults to port 6379. The cache instance
+  only listens on port 6380 (per
+  [redis/cache.conf](../redis/cache.conf)), so the healthcheck always
+  fails and the container shows as `(unhealthy)` forever. Should be
+  `redis-cli -p 6380 ping`. Discovered while standing up the fork's
+  replica ([replica-deploy-plan.md](replica-deploy-plan.md) Phase B Notes).
+- ☐ Wrap the upstream calls in
+  [`getServiceHealth` in games.js:219](../frontend/cfb/games.js#L219) in a
+  try/catch. As written, an `ECONNREFUSED` from python (e.g. python is
+  starting up, slower than node's first healthcheck) becomes an
+  unhandled promise rejection that terminates the node process under
+  Node 24+. The fork's compose file works around this with
+  `depends_on: condition: service_healthy` + `restart: unless-stopped`,
+  but the real fix is in the route handler.
 - ☐ `cd frontend && npm i axios@^1` to upgrade past CVE-vulnerable 0.21.1.
   Verify the PBP and ESPN axios calls still work.
 

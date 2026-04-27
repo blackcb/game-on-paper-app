@@ -8,12 +8,14 @@ migration-plan Phase 0 starts on a real environment.
 
 ## Status
 
-- **Phase A — DigitalOcean droplet**: not started
-- **Phase B — First manual deploy**: not started
-- **Phase C — Cloudflare DNS + TLS**: not started
+- **Phase A — DigitalOcean droplet**: completed 2026-04-26
+- **Phase B — First manual deploy**: completed 2026-04-26
+- **Phase C — Cloudflare DNS + TLS**: completed 2026-04-27
 - **Phase D — GitHub Actions CI/CD on fork**: not started
 - **Phase E — Capture baseline metrics**: not started
-- Last updated: 2026-04-26
+- Last updated: 2026-04-27
+- Droplet: `sports-unseen-university` @ **137.184.138.84** (private 10.116.0.2)
+- Public URL: <https://sports.unseen-university.org/cfb/>
 
 ## Resume hint for Claude Code
 
@@ -75,63 +77,21 @@ authorized, basic firewall, ready to run the Compose stack.
 
 ### Tasks
 
-- ☐ Create a DigitalOcean account and add a payment method, if not already
+- ☑ Create a DigitalOcean account and add a payment method, if not already
   done.
-  > **USER ACTION**: Sign up at digitalocean.com.
-- ☐ Add your SSH public key (`~/.ssh/id_ed25519.pub`) to your DO account.
-  Settings → Security → SSH Keys → Add SSH Key. Use the same one you set
-  up for GitHub earlier this week — it's already on disk.
-  > **USER ACTION**: Paste the public key into the DO dashboard.
-- ☐ Create the droplet:
-  - **Image**: Ubuntu 24.04 LTS x64
-  - **Plan**: Basic, Regular SSD, **s-2vcpu-4gb** ($24/mo)
-  - **Region**: pick the closest to where most baseline traffic will come
-    from. NYC1 if you're east-coast.
-  - **Authentication**: SSH key (the one you just added)
-  - **Hostname**: `sports-unseen-university` (shows up in `hostname` and
-    DO dashboard)
-  - Skip backups, skip monitoring agents for now.
-  > **USER ACTION**: Click "Create Droplet" and wait ~60 seconds for
-  > provisioning. Note the public IPv4 address — it'll be used in Phases C
-  > and D.
-- ☐ Verify SSH:
-  `ssh root@<droplet-ip>` — should land in a root shell on the new box.
-- ☐ Create a non-root user with sudo, disable root login, leave SSH on
-  port 22 (Cloudflare Tunnel deferred to migration plan):
-  ```bash
-  ssh root@<droplet-ip> bash -s <<'EOF'
-    adduser --disabled-password --gecos "" deploy
-    usermod -aG sudo deploy
-    mkdir -p /home/deploy/.ssh
-    cp /root/.ssh/authorized_keys /home/deploy/.ssh/
-    chown -R deploy:deploy /home/deploy/.ssh
-    chmod 700 /home/deploy/.ssh && chmod 600 /home/deploy/.ssh/authorized_keys
-    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-    systemctl restart ssh
-  EOF
-  ```
-  Verify: `ssh deploy@<droplet-ip>` works; `ssh root@<droplet-ip>` is now
-  rejected.
-- ☐ Configure UFW to allow only SSH for now (HTTPS opens in Phase C):
-  ```bash
-  ssh deploy@<droplet-ip> sudo bash -s <<'EOF'
-    ufw default deny incoming
-    ufw default allow outgoing
-    ufw allow OpenSSH
-    ufw --force enable
-    ufw status
-  EOF
-  ```
-- ☐ Enable unattended security upgrades:
-  ```bash
-  ssh deploy@<droplet-ip> sudo bash -s <<'EOF'
-    apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades
-    dpkg-reconfigure -plow unattended-upgrades
-  EOF
-  ```
-- ☐ Install Docker + Compose plugin (official upstream package, not the
-  snap):
+- ☑ Add your SSH public key (`~/.ssh/id_ed25519.pub`) to your DO account.
+  Same key that's authorized on GitHub.
+- ☑ Create the droplet (Ubuntu 24.04 LTS, s-2vcpu-4gb, hostname
+  `sports-unseen-university`, SSH key auth, public IP 137.184.138.84).
+- ☑ Verify SSH as root.
+- ☑ Create `deploy` user with passwordless sudo (`/etc/sudoers.d/deploy`),
+  copy authorized_keys.
+- ☑ Verify deploy user works (login + `sudo -n`).
+- ☑ Configure UFW: deny incoming except OpenSSH (port 22). HTTPS will be
+  opened to Cloudflare IP ranges only in Phase C.
+- ☑ Enable unattended-upgrades (`/etc/apt/apt.conf.d/20auto-upgrades`).
+- ☑ Disable root SSH login (`PermitRootLogin no`), restart sshd.
+- ☑ Install Docker + Compose plugin (official Docker Ubuntu repo):
   ```bash
   ssh deploy@<droplet-ip> sudo bash -s <<'EOF'
     apt-get update
@@ -151,15 +111,26 @@ authorized, basic firewall, ready to run the Compose stack.
 
 ### Acceptance
 
-- `ssh deploy@<droplet-ip>` works without sudo prompt.
-- `ssh root@<droplet-ip>` is rejected.
-- `ufw status` shows only SSH allowed.
-- `docker compose version` reports v2.x.
+- ☑ `ssh deploy@<droplet-ip>` works without sudo prompt.
+- ☑ `ssh root@<droplet-ip>` is rejected with `Permission denied (publickey)`.
+- ☑ `ufw status` shows only SSH allowed.
+- ☑ `docker version` reports a current daemon; `docker compose version`
+  reports the v2 plugin (CLI may show as v5.x in newer Docker releases —
+  the engine is what matters).
 
 ### Notes
 
-_(fill in as you go: droplet IP, region chosen, anything that broke during
-hardening, when unattended-upgrades was last seen running)_
+- **Public IP**: `137.184.138.84` — bookmark for Phases C & D.
+- **Private IP**: `10.116.0.2` (DO VPC) — reserved for any inter-droplet
+  routing later.
+- **Hostname**: `sports-unseen-university`.
+- **OS**: Ubuntu 24.04 LTS, kernel `6.8.0-71-generic`.
+- **Docker**: client/server 29.4.1, Compose plugin v5.1.3 (newer than the
+  v2 referenced in the original plan; same engine semantics).
+- **`deploy` user** has passwordless sudo via `/etc/sudoers.d/deploy`
+  (`deploy ALL=(ALL) NOPASSWD:ALL`). Used by GH Actions in Phase D.
+- **Region** default-nyc1
+- `hello-world` container ran successfully — Docker daemon healthy.
 
 ---
 
@@ -176,102 +147,93 @@ tag or destroy the droplet.
 
 ### Tasks
 
-- ☐ Decide where the fork's container images live. Recommendation:
-  `ghcr.io/blackcb/game-on-paper-{node,python,redis,cache}` (your fork's
-  GHCR, parallel to the upstream's `ghcr.io/saiemgilani/...`). Document
-  the choice in Notes — used in Phase D.
+- ☑ Decide where the fork's container images live. Chosen:
+  `ghcr.io/blackcb/game-on-paper-experiment/{node,python,redis,cache}`.
+  Mirrors upstream's nested-path pattern
+  (`ghcr.io/saiemgilani/saiemgilani/...`) and namespaces the fork's
+  experimental work clearly.
 - ☐ Build and push images **from your laptop** for this initial deploy
-  (Phase D automates this):
-  > **USER ACTION**: Generate a GHCR Personal Access Token with
-  > `write:packages` and `read:packages` scopes at
-  > <https://github.com/settings/tokens/new?scopes=write:packages,read:packages>
-  > and save it locally. Then:
+  (Phase D automates this). PAT with `write:packages` + `read:packages`
+  generated; user logged in via `docker login ghcr.io -u blackcb`:
   ```bash
-  echo $GHCR_TOKEN | docker login ghcr.io -u blackcb --password-stdin
   cd ~/Dev/game-on-paper-app
 
   docker buildx build --platform linux/amd64 \
-    -t ghcr.io/blackcb/game-on-paper-node:latest \
+    -t ghcr.io/blackcb/game-on-paper-experiment/node:latest \
     -f frontend/Dockerfile frontend --push
 
   docker buildx build --platform linux/amd64 \
-    -t ghcr.io/blackcb/game-on-paper-python:latest \
+    -t ghcr.io/blackcb/game-on-paper-experiment/python:latest \
     -f python/Dockerfile python --push
 
   docker buildx build --platform linux/amd64 \
-    -t ghcr.io/blackcb/game-on-paper-redis:latest \
+    -t ghcr.io/blackcb/game-on-paper-experiment/redis:latest \
     -f redis/Dockerfile.lru redis --push
 
   docker buildx build --platform linux/amd64 \
-    -t ghcr.io/blackcb/game-on-paper-cache:latest \
+    -t ghcr.io/blackcb/game-on-paper-experiment/cache:latest \
     -f redis/Dockerfile.cache redis --push
   ```
   Verify in <https://github.com/blackcb?tab=packages> that all four images
   show up.
-- ☐ Make the four package visibilities public (so the droplet can pull
-  without auth):
-  > **USER ACTION**: For each package, Package settings → Change visibility
-  > → Public. Cleaner than provisioning a registry-read PAT on the droplet.
-- ☐ Create a fork-specific compose override file at
-  `docker-compose.fork.yml` that points at your fork's images (and includes
-  the `NODE_ENV=production` that's already in `docker-compose.do.yml`).
-  This file is committed to your dev branch but never to the upstream PR.
-  Skeleton:
-  ```yaml
-  services:
-    redis:
-      image: ghcr.io/blackcb/game-on-paper-redis:latest
-    cache:
-      image: ghcr.io/blackcb/game-on-paper-cache:latest
-    summary:
-      image: ghcr.io/akeaswaran/akeaswaran/cfb-team-summaries:latest
-    node:
-      image: ghcr.io/blackcb/game-on-paper-node:latest
-      command: ["node", "server.js"]
-      environment:
-        RDATA_BASE_URL: "http://python:7000"
-        NODE_ENV: production
-      ports: ["8000:8000"]
-      depends_on: [python, summary, redis, cache]
-    python:
-      image: ghcr.io/blackcb/game-on-paper-python:latest
-  ```
-  (Copy resource limits + healthchecks from `docker-compose.do.yml`; just
-  swap image references.)
-- ☐ Copy the file to the droplet:
-  `scp docker-compose.fork.yml deploy@<droplet-ip>:~/docker-compose.yml`
-- ☐ SSH in and start the stack:
-  ```bash
-  ssh deploy@<droplet-ip>
-  cd ~
-  docker compose pull
-  docker compose up -d
-  docker compose ps     # all 5 services should show "healthy" within 60s
-  docker compose logs --tail=50 node    # sanity check
-  ```
-- ☐ Verify locally from your laptop (port 8000 still firewalled — use SSH
-  tunnel for now):
-  ```bash
-  ssh -L 8000:localhost:8000 deploy@<droplet-ip>
-  # in another terminal:
-  curl -i http://localhost:8000/cfb/healthcheck
-  curl -is http://localhost:8000/cfb/ | head
-  ```
-  The second curl should show a `Server-Timing:` header (proof the Day 1
-  instrumentation is live in the deployed image).
+- ☑ Make the four package visibilities public (so the droplet can pull
+  without auth). Confirmed via `docker compose pull` succeeding without
+  registry credentials on the droplet.
+- ☑ Create `docker-compose.fork.yml` at the repo root pointing at the
+  fork's images. Committed only on the dev branch, never on
+  `instrumentation-pr`.
+- ☑ Copy the file to the droplet
+  (`scp docker-compose.fork.yml deploy@137.184.138.84:~/docker-compose.yml`).
+- ☑ SSH in, `docker compose pull`, `docker compose up -d`, verify
+  healthchecks. Two upstream bugs hit on the way; fixed in the fork's
+  compose file (see Notes for details, and the migration plan's Phase 1
+  follow-ups).
+- ☑ Verify on the droplet itself (port 8000 still firewalled to public):
+  `curl -is http://localhost:8000/cfb/` returns 200 and includes a
+  `Server-Timing:` header. Day 1 instrumentation confirmed live in
+  production-equivalent build.
 
 ### Acceptance
 
-- `docker compose ps` on the droplet shows all 5 services healthy.
-- `curl http://localhost:8000/cfb/healthcheck` (via SSH tunnel) returns
-  `{"status":"ok"}` from python and matching node response.
-- `Server-Timing` header appears on `/cfb/` and `/cfb/game/401403910`.
+- ☑ `docker compose ps` on the droplet shows all 5 services healthy.
+- ☑ `curl http://localhost:8000/cfb/healthcheck` returns
+  `{"python":{"status":"ok"},"node":{"status":"ok"},"cfbData":{"status":"ok"}}`.
+- ☑ `Server-Timing` header appears on `/cfb/` (`total;dur=187ms` cold).
 
 ### Notes
 
-_(fill in: which images registry chosen, any platform/build issues — Apple
-Silicon → linux/amd64 build is mandatory; how long the cold start took;
-memory observed via `docker stats`)_
+- **Image registry**: `ghcr.io/blackcb/game-on-paper-experiment/{node,python,redis,cache}`.
+  Nested-path layout mirrors upstream's `saiemgilani/saiemgilani/...`.
+- **Build environment**: Apple Silicon → `linux/amd64` via OrbStack (Rosetta).
+  Three lightweight images in <1 minute combined; python image took
+  **~5 minutes** (288s docker buildx wall-clock) to build + push because of
+  the pandas/xgboost/sportsdataverse wheels.
+- **Steady-state memory** (idle, no traffic):
+  redis 9 MB · cache 16 MB · python 220 MB · summary 71 MB.
+  Total ~320 MB out of the 4 GB droplet — plenty of headroom for big
+  games before hitting the python container's 4 GB ceiling.
+- **Two upstream bugs hit on first deploy** (both pre-existing in
+  upstream's `docker-compose.do.yml` — fixed only in the fork's compose
+  file, **flagged in migration-plan Phase 1** as a follow-up so they get
+  fixed properly upstream too):
+  1. **Cache healthcheck wrong port**: upstream's healthcheck is
+     `redis-cli ping`, which defaults to port 6379. The cache instance
+     listens only on 6380 (set in `redis/cache.conf`), so the healthcheck
+     always fails and the container is permanently `(unhealthy)`.
+     Fork fix: `redis-cli -p 6380 ping`.
+  2. **Node race-crashes on startup**: docker fires the node healthcheck
+     at start_period=20s. The healthcheck triggers
+     [getServiceHealth in games.js:219](../frontend/cfb/games.js#L219), which
+     calls `axios.get(http://python:7000/healthcheck)` with no try/catch.
+     If python's Flask isn't yet accepting connections, axios throws,
+     the unhandled promise rejection terminates the node process (Node
+     24+ behavior). Fork fix: `depends_on: { python: { condition:
+     service_healthy }, ... }` plus `restart: unless-stopped`. The real
+     fix belongs in `games.js` (try/catch around the upstream calls).
+- **Verification path**: port 8000 is still firewalled at the droplet
+  (UFW only allows 22), so verification is via curl-on-droplet via SSH.
+  Browser-accessible verification arrives in Phase C after Cloudflare
+  proxy + TLS open the public path.
 
 ---
 
@@ -289,23 +251,17 @@ record entirely. Browser TLS will go invalid until rolled back.
 
 ### Tasks
 
-- ☐ Confirm `unseen-university.org` is on Cloudflare and you have admin
-  access. (You already added the CF Web Analytics token for this domain,
-  so it should be.)
-- ☐ Add an `A` record:
+- ☑ Confirm `unseen-university.org` is on Cloudflare and you have admin
+  access.
+- ☑ Add an `A` record:
   - **Name**: `sports`
   - **IPv4 address**: droplet IP from Phase A
   - **Proxy status**: **Proxied** (orange cloud)
   - **TTL**: Auto
-- ☐ Generate a Cloudflare Origin Certificate:
-  Cloudflare dashboard → SSL/TLS → Origin Server → Create Certificate.
-  - **Hostnames**: `sports.unseen-university.org`,
-    `*.sports.unseen-university.org`
-  - **Validity**: 15 years
-  - **Key type**: ECC (smaller, faster)
-  Save the certificate (PEM) and private key locally — don't commit them.
-- ☐ On the droplet, install Caddy as a reverse proxy that terminates TLS
-  with the Origin Certificate and proxies to the node container:
+- ☑ Generate a Cloudflare Origin Certificate (ECC, 15-year validity).
+  Saved to `/Users/cblack/Dev/certificates/origin.{pem,key}` locally.
+- ☑ Install Caddy as a reverse proxy that terminates TLS with the Origin
+  Certificate and proxies to the node container.
   ```bash
   ssh deploy@<droplet-ip> sudo bash -s <<'EOF'
     apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
@@ -316,18 +272,10 @@ record entirely. Browser TLS will go invalid until rolled back.
     mkdir -p /etc/caddy/certs
   EOF
   ```
-- ☐ Copy the Origin Certificate + key to the droplet:
-  ```bash
-  scp origin.pem deploy@<droplet-ip>:/tmp/origin.pem
-  scp origin.key deploy@<droplet-ip>:/tmp/origin.key
-  ssh deploy@<droplet-ip> sudo bash -s <<'EOF'
-    mv /tmp/origin.pem /etc/caddy/certs/origin.pem
-    mv /tmp/origin.key /etc/caddy/certs/origin.key
-    chown root:caddy /etc/caddy/certs/*
-    chmod 640 /etc/caddy/certs/*
-  EOF
-  ```
-- ☐ Write `/etc/caddy/Caddyfile` with the reverse proxy config:
+- ☑ Copy the Origin Certificate + key to the droplet
+  (`/etc/caddy/certs/origin.{pem,key}`, `chown root:caddy`,
+  `chmod 644 origin.pem` / `chmod 640 origin.key`).
+- ☑ Write `/etc/caddy/Caddyfile` with the reverse proxy config:
   ```caddy
   sports.unseen-university.org {
       tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
@@ -338,49 +286,53 @@ record entirely. Browser TLS will go invalid until rolled back.
       }
   }
   ```
-  Then: `sudo systemctl restart caddy && sudo systemctl status caddy`.
-- ☐ Open UFW for Cloudflare's IP ranges only on 443 (and keep 80 closed —
-  Cloudflare proxy serves HTTPS to the browser, talks HTTPS to origin):
-  ```bash
-  ssh deploy@<droplet-ip> sudo bash -s <<'EOF'
-    for ip in $(curl -s https://www.cloudflare.com/ips-v4/); do
-      ufw allow from $ip to any port 443 proto tcp
-    done
-    for ip in $(curl -s https://www.cloudflare.com/ips-v6/); do
-      ufw allow from $ip to any port 443 proto tcp
-    done
-    ufw status numbered
-  EOF
-  ```
-  Origin direct-to-IP HTTPS will fail from anywhere except Cloudflare —
-  that's the point. Bookmark <https://www.cloudflare.com/ips/> for refreshes
-  (rare but does happen).
-- ☐ In Cloudflare dashboard → SSL/TLS → Overview, set encryption mode to
-  **Full (strict)**. Browser ↔ CF and CF ↔ origin are both real TLS now.
-- ☐ Verify in a fresh browser tab:
-  - `https://sports.unseen-university.org/cfb/` loads with a valid
-    padlock.
-  - `curl -I https://sports.unseen-university.org/cfb/` shows
-    `cf-ray: ...` and `Server-Timing` headers.
-  - `curl -I http://<droplet-ip>:443` from your laptop fails with a TLS
-    error or connection-refused (origin won't talk to non-Cloudflare IPs).
-- ☐ Bonus: in Cloudflare → Rules → Page Rules (or Cache Rules in the new
-  dashboard), confirm **no** caching rules are configured yet. The default
-  CF "static asset auto-caching" is fine, but explicit `/assets/*`
-  long-TTL belongs in migration-plan Phase 0 so the delta is measurable.
+  Validated with `caddy validate` and started via systemd.
+- ☑ Open UFW for Cloudflare's IP ranges only on 443. 23 rules added across
+  IPv4 + IPv6, total 24 (incl. SSH on 22). Bookmarked
+  <https://www.cloudflare.com/ips/> for future refreshes.
+- ☑ Cloudflare dashboard → SSL/TLS → Overview set to **Full (strict)**.
+- ☑ Verified end-to-end: `https://sports.unseen-university.org/cfb/`
+  returns 200 from CF (`cf-ray:` present, `via: 1.1 Caddy`,
+  `x-powered-by: Express`, `server-timing:` survives the proxy chain).
+  Direct-to-origin from non-CF IP times out (UFW blocks).
+- ☑ Confirmed no Cache Rules / Page Rules configured. Default CF
+  static-asset auto-caching is fine; explicit `/assets/*` long-TTL stays
+  for migration-plan Phase 0 so the delta is measurable.
 
 ### Acceptance
 
-- `https://sports.unseen-university.org/cfb/` renders the scoreboard.
-- Cloudflare dashboard SSL/TLS shows "Full (strict)".
-- `curl -I https://<droplet-ip>` from outside Cloudflare's IP range fails.
-- `Server-Timing` header survives the Caddy + Cloudflare round trip.
+- ☑ `https://sports.unseen-university.org/cfb/` returns 200 (scoreboard).
+- ☑ Cloudflare SSL/TLS shows "Full (strict)".
+- ☑ `curl https://137.184.138.84` from non-CF IP times out (UFW blocks).
+- ☑ `Server-Timing` header survives Caddy + Cloudflare:
+  warm scoreboard `total;dur=10`, cold game page full breakdown intact.
 
 ### Notes
 
-_(fill in: TLS mode chosen, Origin Certificate expiration date for the
-calendar, any Caddy config tweaks, observed cf-cache-status values for
-sanity)_
+- **TLS mode**: Full (strict). Browser ↔ CF and CF ↔ origin are both
+  real TLS. CF validates the Origin Certificate against Cloudflare's
+  internal CA — works because we used CF's Create Certificate flow.
+- **Origin Certificate** valid 15 years (issued 2026-04-26, expires
+  2041-04). **Calendar reminder:** renew or rotate around 2040.
+- **Caddy version**: v2.11.2.
+- **Caddyfile** kept simple — `tls`, `encode zstd gzip`, `reverse_proxy
+  localhost:8000`. Two `header_up` lines in the original plan turned out
+  to be unnecessary (Caddy's reverse_proxy passes those by default in v2
+  — Caddy printed warnings); removed.
+- **observed `cf-cache-status`**: `DYNAMIC` everywhere — confirms no
+  CDN caching is in effect, which is correct for the baseline phase.
+- **Phase B's first cold game-page hit through the public URL** captured
+  `Server-Timing` breakdown (real production-equivalent baseline):
+  - cold: `espn_pbp 120ms · cache_lookup 1ms · python 5418ms · cache_write 106ms · summary 52ms · total 5703ms`
+  - warm (60s): `espn_pbp 234ms · cache_lookup 5ms · summary 8ms · total 292ms`
+  - The 234ms `espn_pbp` on the warm path confirms the cacheBuster bug
+    in [routes.js:412-414](../frontend/cfb/routes.js#L412) — fixing it
+    (already in migration-plan Phase 1) drops warm-cache total to ~50ms.
+- **Pre-existing bug discovered**: node's UA-banlist middleware in
+  [server.js:43-57](../frontend/server.js#L43) returns 405 for HEAD
+  requests because `req.method` only matches `GET` or `POST`. HEAD is
+  standard and should be allowed (curl uses it for `-I`, search bots use
+  it). Not blocking us, but worth flagging for migration-plan Phase 1.
 
 ---
 

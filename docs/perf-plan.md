@@ -25,17 +25,39 @@ Cloudflare migration. Each day is independently shippable.
 
 ## Baseline metrics
 
-Captured during Day 1, used as the reference point for subsequent measurement.
+Captured during Day 1 + replica-deploy Phase C, used as the reference
+point for subsequent measurement.
 
-- LCP (homepage, US, warm): _tbd_
-- LCP (game page, US, warm): _tbd_
-- LCP (international): _tbd_
-- TTFB (homepage): _tbd_
-- TTFB (game page, completed): _tbd_
-- TTFB (game page, in-progress, cache miss): _tbd_
-- `Server-Timing` breakdown (game page cache miss): _tbd_
-- Lighthouse perf score (homepage / game / leaderboard): _tbd_
-- Page weight transferred (homepage / game): _tbd_
+### `Server-Timing` (production replica via Cloudflare, no CDN cache rules yet)
+
+Captured 2026-04-27 against `https://sports.unseen-university.org/...`:
+
+| Path | Total | Breakdown |
+|---|---:|---|
+| Scoreboard `/cfb/` (warm) | 10 ms | scoreboard JSON warm in node-side memory |
+| Game page **cold** `/cfb/game/401403910` | 5,703 ms | espn_pbp 120 · cache_lookup 1 · **python 5,418** · cache_write 106 · summary 52 |
+| Game page **warm** (reload within 60s) | 292 ms | espn_pbp 234 · cache_lookup 5 · summary 8 |
+
+The 234 ms `espn_pbp` on the warm path confirms the cacheBuster bug
+flagged in [migration-plan.md](migration-plan.md) Phase 1 — even on a
+Redis cache hit, every request re-fetches from ESPN. Fixing it drops
+warm-cache total to ~50 ms.
+
+Earlier local-Docker numbers (different network, useful for relative
+comparison only):
+
+- Game page cold (local): 5.0 s
+- Game page warm (local): 475 ms
+- Scoreboard `/cfb/` cold (local): 825 ms
+- Leaderboard `/cfb/year/2025/teams/differential` cold (local): 400–1000 ms
+
+### Pending (Phase E of replica-deploy plan)
+
+- LCP (homepage, US / international): _needs 24h CF Web Analytics_
+- LCP (game page, US): _needs 24h CF Web Analytics_
+- TTFB (homepage / game cold / game warm): _capture from DevTools_
+- Lighthouse perf score (homepage / game / leaderboard): _run from DevTools_
+- Page weight transferred (homepage / game): _from DevTools status bar_
 
 ---
 
