@@ -1,0 +1,88 @@
+# Fork-only deploy pipeline. Builds the four containers, pushes to the
+# fork's GHCR namespace, and deploys to sports.unseen-university.org.
+#
+# Do not propagate this workflow to the upstream PR.
+# See docs/replica-deploy-plan.md Phase D for setup details.
+
+name: fork-deploy
+
+on:
+  push:
+    branches: [instrument-plus-cloudflare-cdn]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: node
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+          - name: python
+            context: ./python
+            dockerfile: ./python/Dockerfile
+          - name: redis
+            context: ./redis
+            dockerfile: ./redis/Dockerfile.lru
+          - name: cache
+            context: ./redis
+            dockerfile: ./redis/Dockerfile.cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/game-on-paper-experiment/${{ matrix.name }}:latest
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy compose file to droplet
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          source: docker-compose.fork.yml
+          target: /home/deploy/
+          overwrite: true
+
+      - name: Deploy on droplet
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          script: |
+            set -e
+            cd /home/deploy
+            mv -f docker-compose.fork.yml docker-compose.yml
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker compose ps
