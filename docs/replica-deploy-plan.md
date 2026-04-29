@@ -11,9 +11,9 @@ migration-plan Phase 0 starts on a real environment.
 - **Phase A — DigitalOcean droplet**: completed 2026-04-26
 - **Phase B — First manual deploy**: completed 2026-04-26
 - **Phase C — Cloudflare DNS + TLS**: completed 2026-04-27
-- **Phase D — GitHub Actions CI/CD on fork**: not started
-- **Phase E — Capture baseline metrics**: not started
-- Last updated: 2026-04-27
+- **Phase D — GitHub Actions CI/CD on fork**: completed 2026-04-28
+- **Phase E — Capture baseline metrics**: in progress
+- Last updated: 2026-04-28
 - Droplet: `sports-unseen-university` @ **137.184.138.84** (private 10.116.0.2)
 - Public URL: <https://sports.unseen-university.org/cfb/>
 
@@ -349,7 +349,7 @@ flow.
 
 ### Tasks
 
-- ☐ Generate two GitHub Actions secrets via repo Settings → Secrets:
+- ☑ Generate four GitHub Actions secrets via repo Settings → Secrets:
   > **USER ACTION**: Add the following to the fork's repo secrets:
   > - `DEPLOY_HOST` = droplet IP
   > - `DEPLOY_USER` = `deploy`
@@ -360,10 +360,8 @@ flow.
   >   generate a deploy-only ed25519 key, add the public half to
   >   `/home/deploy/.ssh/authorized_keys` on the droplet, and put the
   >   private half here.
-- ☐ Restore the archived workflow as a fork-specific deploy at
-  `.github/workflows/fork-deploy.yml` (don't reuse `deploy.yml` — keeps it
-  visually distinct from upstream's, and prevents accidentally syncing it
-  back upstream). Trigger only on the dev branch:
+- ☑ Created `.github/workflows/fork-deploy.yml` (separate from
+  upstream's archived deploy.yml). Trigger only on the dev branch:
   ```yaml
   name: fork-deploy
 
@@ -443,30 +441,51 @@ flow.
   `system prune` because that nukes the running stack mid-deploy and
   invalidates Redis cache (upstream's flow has that bug; we don't have to
   inherit it).
-- ☐ Commit `fork-deploy.yml` and `docker-compose.fork.yml` on the dev
+- ☑ Commit `fork-deploy.yml` and `docker-compose.fork.yml` on the dev
   branch. **Do not** commit them to `instrumentation-pr` — those files are
   fork-only.
-- ☐ Push the dev branch and watch the workflow run in GitHub Actions →
-  Actions tab.
-- ☐ First run will take 5–10 min (no cache yet); subsequent runs ~2 min.
-- ☐ After the workflow succeeds, verify:
-  `curl -I https://sports.unseen-university.org/cfb/` reflects the latest
-  image (confirm via a known-different output, e.g., `Server-Timing` value
-  changes).
-- ☐ Add a deploy badge to the dev branch's README (or skip — fork only).
+- ☑ Push the dev branch and watch the workflow run in GitHub Actions.
+- ☑ First run failed all four builds with `denied: permission_denied`
+  because the GHCR packages were created via personal PAT and weren't
+  linked to the repo. Fixed by adding repo write access via Package
+  Settings → Manage Actions access on each of the four packages.
+- ☑ Re-run all jobs from the failed run page; second attempt: all 5 jobs
+  green (4 builds + deploy). Total duration: ~9 minutes (no cache for the
+  first run; python's wheels dominated).
+- ☑ Verified post-deploy: `docker compose ps` on droplet shows the four
+  fork containers restarted ~7 min after the run finished, all healthy.
+  `summary` left untouched (third-party image, not in our matrix).
+  `https://sports.unseen-university.org/cfb/` returns 200 with
+  `Server-Timing: total;dur=13` and `cf-ray:` headers intact.
 
 ### Acceptance
 
-- Pushing to `instrument-plus-cloudflare-cdn` triggers a green workflow.
-- All four images are rebuilt and pushed to the fork's GHCR.
-- Droplet picks up the new images within ~30 seconds of the deploy job
+- ☑ Pushing to `instrument-plus-cloudflare-cdn` triggers a green workflow.
+- ☑ All four images are rebuilt and pushed to the fork's GHCR.
+- ☑ Droplet picks up the new images within ~30 seconds of the deploy job
   finishing.
-- `Server-Timing` instrumentation continues to fire post-deploy.
+- ☑ `Server-Timing` instrumentation continues to fire post-deploy.
 
 ### Notes
 
-_(fill in: secrets created, first deploy duration, any image-build flakes
-on Apple Silicon → amd64, cache hit ratio after 2nd run)_
+- **Secrets used**: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PORT`,
+  `DEPLOY_SSH_KEY`. The SSH key is a deploy-only ed25519 keypair stored
+  locally at `~/.ssh/sports_deploy{,.pub}`, separate from the personal
+  key used for GitHub auth. Public half is appended to deploy user's
+  `authorized_keys` on the droplet.
+- **First-deploy gotcha**: GHCR packages created manually via personal
+  PAT don't auto-link to the source repo for `GITHUB_TOKEN` write
+  access. The "Manage Actions access" settings page on each package
+  needs an explicit `Add Repository → blackcb/game-on-paper-app → Write`
+  step. One-time fix; survives all future deploys.
+- **First-run duration**: 9 min (4 builds + deploy). No GHA cache. Python
+  was the long pole at ~5 min.
+- **Subsequent runs (expected)**: ~2 min. GHA cache scoped per-image
+  (`scope=${{ matrix.name }}`), so a code change to one service only
+  rebuilds that one. Verify on the next push.
+- **Buildx setup**: `docker/setup-buildx-action@v3` provisions a
+  buildx-container driver. `docker/build-push-action@v6` handles GHA
+  cache automatically.
 
 ---
 
