@@ -10,7 +10,7 @@ Cloudflare migration. Each day is independently shippable.
 - **Day 3 — Playwright E2E**: not started
 - **Day 4 — JSON Schema contract**: not started
 - **Day 5 — Lighthouse CI**: not started
-- Last updated: 2026-04-26
+- Last updated: 2026-04-28
 
 ## Resume hint for Claude Code
 
@@ -84,22 +84,30 @@ The 5.4 s Python pipeline confirms the original analysis: Python work
 is 89% of cold-cache TTFB. CDN caching (migration Phase 0) won't help
 on a unique gameId — only the Worker + Cache API rewrite (Phase 2) does.
 
-### Lighthouse Performance score (Desktop preset)
+### Lighthouse Performance score
 
-Captured 2026-04-28 via Chrome DevTools → Lighthouse → Desktop →
-Performance only, median of 3 runs:
+Captured 2026-04-28 via Chrome DevTools → Lighthouse → Performance only,
+median of 3 runs per URL per preset:
 
-| URL | Desktop perf score |
-|---|---:|
-| `/cfb/` | 99 |
-| `/cfb/game/401403910` | 94 |
-| `/cfb/year/2024/teams/differential` | 100 |
+| URL | Desktop | Mobile |
+|---|---:|---:|
+| `/cfb/` | 99 | 80 |
+| `/cfb/game/401403910` | 94 | 80 |
+| `/cfb/year/2024/teams/differential` | 100 | 74 |
 
-These are surprisingly high given the 2.9 MB raw game page, but make
-sense for the Desktop preset (10 Mbps simulated, 1× CPU). The migration
-plan's wins land on different axes — cold-cache server TTFB (6 s → tens
-of ms via Phase 2 Worker + Cache API), Mobile Lighthouse (likely 50–70
-today, untested), origin egress (Phase 0 CDN cache rules).
+Desktop scores are already in the green — Desktop preset (10 Mbps, 1×
+CPU) is forgiving. Mobile (Slow 4G ~1.6 Mbps, 4× CPU) is the tougher
+baseline and the one the migration plan actually moves. Expected
+improvements per phase:
+
+- Phase 0 (CDN cache rules on `/assets/*`): repeat-visit mobile +5–10
+- Phase 1 (asset cleanup, drop duplicate bootstrap variants and source
+  maps): mobile +5–10 across the board
+- Phase 2 (Worker rewrite + Cache API for completed games): big jump
+  on the game page where today the 2.9 MB raw HTML dominates
+
+Targets: Desktop ≥95 / Mobile ≥90 across all three pages by end of
+Phase 2.
 
 ### Skipped / deferred
 
@@ -108,9 +116,6 @@ today, untested), origin egress (Phase 0 CDN cache rules).
   produce more representative LCP than Lighthouse already does. Real-user
   LCP gets captured later from upstream `gameonpaper.com` once PR #164
   merges and that production gets the instrumentation.
-- **Mobile Lighthouse** — not run yet. Worth a 5-minute follow-up to set
-  the tougher baseline that the migration plan actually moves. Run via
-  Chrome DevTools → Lighthouse → Mobile preset, same three URLs.
 ---
 
 ## Day 1 — Baseline observability
