@@ -51,14 +51,45 @@ comparison only):
 - Scoreboard `/cfb/` cold (local): 825 ms
 - Leaderboard `/cfb/year/2025/teams/differential` cold (local): 400–1000 ms
 
-### Pending (Phase E of replica-deploy plan)
+### Captured 2026-04-28 (Phase E)
 
-- LCP (homepage, US / international): _needs 24h CF Web Analytics_
-- LCP (game page, US): _needs 24h CF Web Analytics_
-- TTFB (homepage / game cold / game warm): _capture from DevTools_
-- Lighthouse perf score (homepage / game / leaderboard): _run from DevTools_
-- Page weight transferred (homepage / game): _from DevTools status bar_
+**TTFB** (median of 5, via Cloudflare proxy from local laptop):
 
+| Path | Median TTFB |
+|---|---:|
+| `/cfb/` | 101 ms |
+| `/cfb/year/2024/teams/differential` | 113 ms |
+| `/cfb/game/401403910` warm Redis | 560 ms (still bottlenecked by ESPN, see cacheBuster bug) |
+
+**Page weight** (compressed = what users actually transfer; uncompressed in parens):
+
+| Path | Brotli/gzip | Uncompressed |
+|---|---:|---:|
+| `/cfb/` | 11.7 KB | 315.6 KB |
+| `/cfb/year/2024/teams/differential` | 10.6 KB | 169.1 KB |
+| `/cfb/game/401403910` | **161.5 KB** | **2,914.0 KB** |
+
+The 2.9 MB uncompressed game page is the full PBP JSON embedded inline
+into the EJS-rendered HTML. Cloudflare brotli compresses it to ~162 KB
+on the wire — still the largest payload by far. Migration plan Phase 2
+splits this when the Worker rewrite happens.
+
+**Server-Timing** (cold game-page load, never-seen gameId 401520434):
+
+```
+espn_pbp 362 ms · cache_lookup 1 ms · python 5,388 ms · cache_write 110 ms · summary 195 ms · total 6,058 ms
+```
+
+The 5.4 s Python pipeline confirms the original analysis: Python work
+is 89% of cold-cache TTFB. CDN caching (migration Phase 0) won't help
+on a unique gameId — only the Worker + Cache API rewrite (Phase 2) does.
+
+### Pending Phase E captures
+
+- **Lighthouse perf scores** for the three URLs — DevTools → Lighthouse
+  panel → Desktop preset → Performance only → 3 runs each, median.
+- **LCP p75** from CF Web Analytics — needs ≥24 h of real-user traffic.
+  Check 2026-04-29 evening or later.
 ---
 
 ## Day 1 — Baseline observability
