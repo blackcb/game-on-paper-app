@@ -5,7 +5,7 @@ Cloudflare migration. Each day is independently shippable.
 
 ## Status
 
-- **Day 1 — Baseline observability**: in progress (code changes done; user-action items pending)
+- **Day 1 — Baseline observability**: completed 2026-04-28
 - **Day 2 — Python snapshot tests**: not started
 - **Day 3 — Playwright E2E**: not started
 - **Day 4 — JSON Schema contract**: not started
@@ -84,12 +84,33 @@ The 5.4 s Python pipeline confirms the original analysis: Python work
 is 89% of cold-cache TTFB. CDN caching (migration Phase 0) won't help
 on a unique gameId — only the Worker + Cache API rewrite (Phase 2) does.
 
-### Pending Phase E captures
+### Lighthouse Performance score (Desktop preset)
 
-- **Lighthouse perf scores** for the three URLs — DevTools → Lighthouse
-  panel → Desktop preset → Performance only → 3 runs each, median.
-- **LCP p75** from CF Web Analytics — needs ≥24 h of real-user traffic.
-  Check 2026-04-29 evening or later.
+Captured 2026-04-28 via Chrome DevTools → Lighthouse → Desktop →
+Performance only, median of 3 runs:
+
+| URL | Desktop perf score |
+|---|---:|
+| `/cfb/` | 99 |
+| `/cfb/game/401403910` | 94 |
+| `/cfb/year/2024/teams/differential` | 100 |
+
+These are surprisingly high given the 2.9 MB raw game page, but make
+sense for the Desktop preset (10 Mbps simulated, 1× CPU). The migration
+plan's wins land on different axes — cold-cache server TTFB (6 s → tens
+of ms via Phase 2 Worker + Cache API), Mobile Lighthouse (likely 50–70
+today, untested), origin egress (Phase 0 CDN cache rules).
+
+### Skipped / deferred
+
+- **LCP p75 from CF Web Analytics** on the replica — skipped. The replica
+  has no organic traffic and synthetic single-vantage Playwright wouldn't
+  produce more representative LCP than Lighthouse already does. Real-user
+  LCP gets captured later from upstream `gameonpaper.com` once PR #164
+  merges and that production gets the instrumentation.
+- **Mobile Lighthouse** — not run yet. Worth a 5-minute follow-up to set
+  the tougher baseline that the migration plan actually moves. Run via
+  Chrome DevTools → Lighthouse → Mobile preset, same three URLs.
 ---
 
 ## Day 1 — Baseline observability
@@ -139,11 +160,17 @@ in the section above.
   stay per-page because index.ejs uses a different bundle
   (`index.css` + `dark-index.css`) than the others (`dashboard.css` +
   `blog.css` + `dark-game.css` + `bootstrap-icons.css`).
-- ☐ Build and run the stack locally; verify `Server-Timing` shows up in
-  DevTools → Network → headers for `/cfb/` and `/cfb/game/401403910`.
-- ☐ Deploy to prod. Wait 24h for CF Web Analytics to collect data.
-- ☐ Capture baseline numbers in the Baseline metrics section above.
-  Screenshots into `docs/baseline/` if helpful.
+- ☑ Build and run the stack locally; verified `Server-Timing` shows up
+  in DevTools → Network for `/cfb/` and `/cfb/game/401403910`.
+- ☑ Deploy to prod. Done via the replica deploy plan
+  ([replica-deploy-plan.md](replica-deploy-plan.md)) at
+  `https://sports.unseen-university.org/cfb/` rather than upstream
+  production. Real-user LCP from gameonpaper.com still pending the PR
+  #164 merge.
+- ☑ Capture baseline numbers in the Baseline metrics section above.
+  TTFB, page weight, Server-Timing breakdowns, and Lighthouse Desktop
+  scores all captured. LCP-from-CF-Web-Analytics deferred until upstream
+  prod is instrumented.
 
 ### Acceptance
 

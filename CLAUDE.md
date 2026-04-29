@@ -19,23 +19,22 @@ checkboxes (`☐`/`☑`), per-section Status block at the top, per-section Notes
 subsection for decisions, `> USER ACTION:` and destructive-step gates honored
 even in autopilot.
 
-- **[docs/replica-deploy-plan.md](docs/replica-deploy-plan.md)** —
-  Multi-phase plan to stand up `sports.unseen-university.org` as a parallel
-  testing environment (DigitalOcean droplet + Cloudflare DNS/TLS + GitHub
-  Actions CI/CD on the fork). **Prerequisite for perf-plan tasks 9–10 and
-  for migration-plan Phase 0+** — until this is done, neither plan can
-  collect meaningful before/after numbers. When asked to "continue the
-  replica deploy", find the first unchecked task in the next
-  not-completed phase.
-- **[docs/perf-plan.md](docs/perf-plan.md)** — 5-day plan to add baseline
-  observability, tests, and CI gates. Day 1 code work is complete; tasks
-  9–10 (deploy, capture baselines) are blocked on the replica plan. When
-  asked to "continue the perf plan", read the file and pick up at the
-  first unchecked task in the next not-completed day.
+- **[docs/replica-deploy-plan.md](docs/replica-deploy-plan.md)** — DONE.
+  `sports.unseen-university.org` is live and serving. DigitalOcean
+  droplet at 137.184.138.84, Caddy reverse proxy with Cloudflare Origin
+  Cert, UFW locked to Cloudflare IPs only, GitHub Actions auto-deploys
+  on push to `instrument-plus-cloudflare-cdn`. A 5-min mobile Lighthouse
+  run is the only optional follow-up.
+- **[docs/perf-plan.md](docs/perf-plan.md)** — Day 1 DONE. Server-Timing,
+  structured logging, head partial, Lighthouse Desktop, page weight,
+  TTFB all captured. Day 2 (Python snapshot tests) is the next ready-to-
+  start day. When asked to "continue the perf plan", pick up at Day 2.
 - **[docs/migration-plan.md](docs/migration-plan.md)** — Multi-phase plan
   to migrate to Cloudflare (CDN → quick-win bug fixes → Worker rewrite →
-  Containers → optional ONNX port). Phase 0 begins after the replica is
-  serving traffic. When asked to "continue the migration", same routine.
+  Containers → optional ONNX port). **Phase 0 (CDN cache rules) is now
+  unblocked** — the replica gives us a real before/after frame. Phase 1
+  has accumulated five fork-discovered upstream bugs. When asked to
+  "continue the migration", start at Phase 0.
 
 If unsure which plan an ambiguous request maps to, ask. Recommended order:
 replica deploy → perf-plan day 2+ in parallel with migration phase 0+.
