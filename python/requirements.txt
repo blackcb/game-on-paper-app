@@ -6,3 +6,8 @@ Werkzeug==3.1.5
 xgboost~=2.1.4
 numpy>=2.0.2
 sportsdataverse==0.0.36.3.3
+# Schema validation for /cfb/process responses (perf-plan Day 4).
+# Both the Flask app and the dump_schema.py tooling import from
+# python/schemas.py. Pydantic 2's model_json_schema() output is fed
+# to ajv on the Node side via shared/process-response.schema.json.
+pydantic>=2,<3

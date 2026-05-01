@@ -86,3 +86,44 @@ jobs:
             docker compose pull
             docker compose up -d --remove-orphans
             docker compose ps
+
+  e2e:
+    # Run Playwright after deploy completes so we test what was just rolled
+    # out. Inlined here rather than in e2e.yml because workflow_run only
+    # fires from workflows on the default branch (the fork's main is
+    # intentionally aligned with upstream, so e2e.yml on dev never fires
+    # workflow_run). e2e.yml still exists for the nightly cron + manual
+    # dispatch paths.
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E suite
+        env:
+          BASE_URL: https://sports.unseen-university.org
+        run: npx playwright test
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14

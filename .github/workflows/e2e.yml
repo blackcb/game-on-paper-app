@@ -1,14 +1,14 @@
 name: e2e
 
-# Triggers:
-#   1. After fork-deploy.yml completes successfully — guarantees we test
-#      what was just deployed, not the previous version.
-#   2. Daily at 14:30 UTC (catches drift even when no deploys happened).
-#   3. Manual dispatch.
+# Per-push E2E lives in fork-deploy.yml as a `needs: deploy` job — that
+# was the simplest way to get post-deploy ordering, since `workflow_run`
+# only fires from workflows on the default branch and the fork's main is
+# intentionally tracking upstream.
+#
+# This file covers the two paths fork-deploy.yml doesn't:
+#   1. Daily at 14:30 UTC (catches drift even when no deploys happened).
+#   2. Manual dispatch (re-run on demand without pushing).
 on:
-  workflow_run:
-    workflows: [fork-deploy]
-    types: [completed]
   schedule:
     - cron: "30 14 * * *"
   workflow_dispatch:
@@ -22,9 +22,6 @@ concurrency:
 
 jobs:
   playwright:
-    # Don't run if the triggering deploy failed — no point testing a stale
-    # or partial deployment.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
