@@ -1,6 +1,7 @@
 node_modules
 */node_modules
-*/package-lock.json
+# Lockfiles intentionally NOT ignored — perf-plan Day 3 added
+# frontend/package-lock.json so Playwright + transitives reproduce.
 */.DS_Store
 .DS_Store
 env
@@ -15,3 +16,15 @@ cfb-api
 .ipynb_checkpoints
 __pycache__
 */__pycache__
+
+# Playwright runtime artifacts (regenerated on every run)
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/.last-run.json
+frontend/playwright/.cache/
+
+# Python venv (per-developer, never committed)
+python/.venv/
+python/.pytest_cache/
+*/.pytest_cache/

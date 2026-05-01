@@ -28,6 +28,9 @@
     "ejs": "^3.1.5",
     "express": "^4.17.1",
     "morgan": "^1.10.0",
-    "redis" : "^4.3.0"
+    "redis": "^4.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1"
   }
 }

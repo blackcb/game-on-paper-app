@@ -7,10 +7,10 @@ Cloudflare migration. Each day is independently shippable.
 
 - **Day 1 — Baseline observability**: completed 2026-04-28
 - **Day 2 — Python snapshot tests**: completed 2026-04-30
-- **Day 3 — Playwright E2E**: not started
+- **Day 3 — Playwright E2E**: completed 2026-05-01
 - **Day 4 — JSON Schema contract**: not started
 - **Day 5 — Lighthouse CI**: not started
-- Last updated: 2026-04-30
+- Last updated: 2026-05-01
 
 ## Resume hint for Claude Code
 
@@ -318,38 +318,93 @@ into PR previews after Tier 2 of the Cloudflare migration.
 
 ### Tasks
 
-- ☐ `cd frontend && npm i -D @playwright/test` and check in
-  `package-lock.json` (it isn't currently committed — fix that here).
-- ☐ `npx playwright install --with-deps chromium`.
-- ☐ `frontend/playwright.config.js`: `baseURL` from `BASE_URL` env, default
-  `https://www.gameonpaper.com`. Single project (chromium desktop).
-  Workers: 2. Retries: 1 on CI, 0 locally.
-- ☐ `frontend/tests/e2e/scoreboard.spec.js`: visit `/cfb/`, assert at least
-  one game thumb element is visible (use a stable selector — inspect
-  [game_thumb.ejs](../frontend/views/pages/cfb/game_thumb.ejs) to find one),
-  assert no uncaught console errors.
-- ☐ `frontend/tests/e2e/game.spec.js`: visit `/cfb/game/401403910`, assert
-  score text matches `/\d+ - \d+/`, assert `canvas#wpChart` exists, assert
-  the drive table has at least one row.
-- ☐ `frontend/tests/e2e/leaderboard.spec.js`: visit
-  `/cfb/year/2024/teams/differential` (use a completed season for stability),
-  assert table has ≥100 rows.
-- ☐ `.github/workflows/e2e.yml`: triggers on `pull_request` and
-  `schedule: cron: '30 14 * * *'` (daily 14:30 UTC). Upload Playwright HTML
-  report as artifact on failure.
-- ☐ Add a note in this plan and in [CLAUDE.md](../CLAUDE.md): "PR previews
-  come with Tier 2 (Cloudflare Pages migration); until then PR runs hit
-  prod or are skipped on PR." Decide which.
+- ☑ `npm i -D @playwright/test` in `frontend/`.
+  `frontend/package-lock.json` now committed (`.gitignore` updated to
+  stop excluding `*/package-lock.json` — see Notes below).
+- ☑ `npx playwright install chromium` (skipped `--with-deps` locally on
+  macOS; CI uses `--with-deps` for Linux runner system libs).
+- ☑ `frontend/playwright.config.js`: `baseURL` from `BASE_URL` env,
+  default **`https://sports.unseen-university.org`** (the replica), not
+  upstream gameonpaper.com — the replica is what this fork controls.
+  Single chromium-desktop project, 2 workers, retries 1 local / 2 CI.
+- ☑ `frontend/tests/e2e/scoreboard.spec.js`: visits `/cfb/`, asserts
+  title matches `/Game on Paper/`, asserts either ≥1 game thumb link
+  (`a[href*="/cfb/game/"]`) OR the "No games scheduled." copy is
+  visible (off-day handling), filters known-noisy console errors
+  (analytics endpoints, browser extension noise).
+- ☑ `frontend/tests/e2e/game.spec.js`: visits
+  `/cfb/game/401403910` (same gameId as Day 2 fixture), asserts page
+  title matches `/\d+,.*\d+\s*\|\s*Game on Paper/` (the
+  "Team1 24, Team2 17 | Game on Paper" pattern), asserts `canvas#wpChart`
+  + `canvas#epChart` are visible, asserts ≥10 "Drive Chart" sections.
+- ☑ `frontend/tests/e2e/leaderboard.spec.js`: visits
+  `/cfb/year/2024/teams/differential` (stable completed season),
+  asserts ≥100 rows in `table tbody tr`, asserts title contains the
+  season number.
+- ☑ `.github/workflows/e2e.yml`: triggers on **`workflow_run` of
+  fork-deploy** (so we test what was just deployed, not the previous
+  version), `schedule: cron '30 14 * * *'`, and `workflow_dispatch`.
+  Skips when the triggering deploy failed. Uploads Playwright HTML
+  report as artifact on failure (14-day retention).
+- ☑ Decision documented: **PR runs hit the replica** (not upstream
+  gameonpaper.com). The fork doesn't open PRs against itself in
+  practice; the schedule + post-deploy triggers cover the real flow.
+  Tier 2 of the migration plan will introduce per-PR preview URLs
+  via Cloudflare Pages; until then the replica is the test target.
 
 ### Acceptance
 
-- `BASE_URL=https://www.gameonpaper.com npx playwright test` passes locally.
-- Nightly cron run is green in GH Actions.
-- Failing test produces a downloadable HTML report.
+- ☑ `npx playwright test` passes locally — 3 tests, **7.7s total**
+  (single workflow_dispatch run).
+- ☐ Nightly cron run green in GH Actions — proves itself when the
+  first cron fires (next 14:30 UTC).
+- ☑ Failing test produces a downloadable HTML report. Verified during
+  development: a Drive-Chart strict-mode locator violation produced
+  `frontend/test-results/.../error-context.md` and a screenshot,
+  exactly the kind of artifact `e2e.yml` will upload on CI failure.
 
 ### Notes
 
-_(fill in as you go)_
+- **Default `BASE_URL` flipped to the replica.** The plan as written
+  defaulted to `https://www.gameonpaper.com`, but the fork's testing
+  target is `sports.unseen-university.org`. Override with the env var
+  if you want to point at upstream once it's running PR #164's
+  instrumentation.
+- **`workflow_run` trigger over `pull_request`.** The fork doesn't
+  receive PRs in practice (we push directly to the dev branch). E2E
+  needs to test the *deployed* version, which requires waiting for
+  fork-deploy to succeed. `workflow_run` is exactly that pattern —
+  GH triggers e2e.yml after fork-deploy.yml's "completed" event, and
+  the job's `if:` condition skips when the triggering run failed.
+  Trade-off: `workflow_run` runs against the default branch's
+  workflow definition, not the triggering branch's, so workflow
+  changes only take effect once merged. Acceptable for now;
+  revisit if it becomes annoying.
+- **Two real flakes worth mentioning:**
+  - ESPN's scoreboard endpoint aborts intermittently with a TLS
+    socket close (`Error: aborted at TLSSocket.socketCloseListener`).
+    The frontend correctly renders the error template in that case,
+    which the test misreads as a regression. Retries=1 absorbs it
+    reliably (caught it twice during local dev, both passed on
+    retry).
+  - `getByText(/Drive Chart/)` resolves to ~20 elements (one per
+    drive on the game page). Use `.count()` >= N rather than
+    `toBeVisible()` on the locator — Playwright's strict mode
+    rejects multi-match `toBeVisible()`.
+- **Console-error filter is opinionated.** The scoreboard test
+  ignores errors from `cloudflareinsights.com` (analytics POSTs that
+  fail with no real impact), `plausible.io`, "extension" (Chrome
+  extension noise the user reported earlier), and the
+  "asynchronous response by returning true" extension-content-script
+  warning. Anything else surfaces as a real error.
+- **`.gitignore` change**: removed `*/package-lock.json` so the new
+  `frontend/package-lock.json` commits. The original entry predated
+  the perf plan and was excluding the file Day 3 explicitly requires.
+  Replaced with a comment noting the dependency.
+- **Fixture parity with Day 2**: the game test uses the same gameId
+  (401403910) as the Python snapshot tests. If the rendered HTML
+  starts diverging from what the Python pipeline produces, one of
+  the two test suites will catch it.
 
 ---
 

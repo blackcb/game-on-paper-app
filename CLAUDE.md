@@ -25,10 +25,13 @@ even in autopilot.
   Cert, UFW locked to Cloudflare IPs only, GitHub Actions auto-deploys
   on push to `instrument-plus-cloudflare-cdn`. A 5-min mobile Lighthouse
   run is the only optional follow-up.
-- **[docs/perf-plan.md](docs/perf-plan.md)** — Day 1 DONE. Server-Timing,
-  structured logging, head partial, Lighthouse Desktop, page weight,
-  TTFB all captured. Day 2 (Python snapshot tests) is the next ready-to-
-  start day. When asked to "continue the perf plan", pick up at Day 2.
+- **[docs/perf-plan.md](docs/perf-plan.md)** — Days 1-3 DONE. Day 1 set
+  the baseline (Server-Timing, structured logging, head partial,
+  Lighthouse desktop+mobile, TTFB, page weight). Day 2 added Python
+  snapshot tests with three captured ESPN fixtures. Day 3 added Playwright
+  E2E (3 specs, runs after every fork-deploy + nightly cron).
+  Day 4 (JSON Schema contract) is next. When asked to "continue the perf
+  plan", pick up at Day 4.
 - **[docs/migration-plan.md](docs/migration-plan.md)** — Multi-phase plan
   to migrate to Cloudflare (CDN → quick-win bug fixes → Worker rewrite →
   Containers → optional ONNX port). **Phase 0 (CDN cache rules) is now

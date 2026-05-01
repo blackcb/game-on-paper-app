@@ -1,0 +1,59 @@
+name: e2e
+
+# Triggers:
+#   1. After fork-deploy.yml completes successfully — guarantees we test
+#      what was just deployed, not the previous version.
+#   2. Daily at 14:30 UTC (catches drift even when no deploys happened).
+#   3. Manual dispatch.
+on:
+  workflow_run:
+    workflows: [fork-deploy]
+    types: [completed]
+  schedule:
+    - cron: "30 14 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    # Don't run if the triggering deploy failed — no point testing a stale
+    # or partial deployment.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E suite
+        env:
+          BASE_URL: https://sports.unseen-university.org
+        run: npx playwright test
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14
