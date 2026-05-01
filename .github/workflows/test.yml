@@ -33,4 +33,15 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run pytest (snapshot tests + others, integration deselected)
-        run: pytest -m "not integration"
+        # Capture pytest output to the run summary so failures are
+        # debuggable from the public run page without log-access perms.
+        run: |
+          set -o pipefail
+          {
+            echo '## pytest output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          pytest -m "not integration" -v 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
