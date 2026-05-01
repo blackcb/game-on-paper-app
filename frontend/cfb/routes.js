@@ -410,13 +410,57 @@ const QUARANTINE_LIST = [
 router.route('/game/:gameId')
     .get(async function(req, res, next) {
         try {
+            // Fast path for completed games: Redis is the source of
+            // truth for the processed PBP, and it carries
+            // `gameInfo.status.type.completed` — enough to know whether
+            // we need ESPN at all. If we have a cache hit AND the game
+            // is finalized, skip ESPN entirely (~400 ms saving on the
+            // warm path) and render straight from cache.
+            //
+            // We fall through to the original ESPN-first flow for:
+            //   - cache miss (no entry yet — first visitor builds it)
+            //   - in-progress games (status may have transitioned in
+            //     the cache's 60s TTL window; safer to re-check ESPN)
+            //   - scheduled / pregame games (cache only contains
+            //     processed PBP; pregame template needs a different
+            //     data shape pulled from ESPN + summary service)
+            //   - quarantined games (we never want to serve those
+            //     even if a stale cache entry exists)
+            if (!QUARANTINE_LIST.includes(req.params.gameId)) {
+                let cached = null;
+                try {
+                    const raw = await time(res, 'cache_lookup', () =>
+                        Games.getGameCacheValue(`cfb-${req.params.gameId}`)
+                    );
+                    if (raw) cached = JSON.parse(raw);
+                } catch (e) {
+                    debuglog(`cache_lookup failed for ${req.params.gameId}: ${e.message}`);
+                }
+                if (cached?.gameInfo?.status?.type?.completed === true) {
+                    if (req.query.json == true || req.query.json == "true" || req.query.json == "1") {
+                        return res.json(cached);
+                    }
+                    const inputSeason = cached.header?.season?.year;
+                    const season = Math.min(Math.max(inputSeason, 2014), 2025);
+                    let percentiles = [];
+                    try {
+                        percentiles = await time(res, 'summary', () => retrievePercentiles(season));
+                    } catch (e) {
+                        console.log(`error while retrieving league percentiles: ${e}`);
+                    }
+                    return res.render('pages/cfb/game', {
+                        gameData: cached,
+                        percentiles,
+                        season,
+                    });
+                }
+            }
+
+            // Slow path: cache miss / in-progress / scheduled.
             // No cache-buster: ESPN's CDN already serves these endpoints
-            // with short TTLs (1–5 min) appropriate to the data's
-            // staleness budget. Appending a unix-ms suffix forced every
-            // request to bypass that cache and hit ESPN's origin,
-            // costing ~400 ms per request even on warm Redis hits
-            // (verified via Day 1 Server-Timing instrumentation:
-            // espn_pbp dropped from 441ms to ~30ms after this change).
+            // with short TTLs (1–5 min); appending a unix-ms suffix
+            // forced every request through to ESPN origin and added
+            // ~400 ms / call.
             const pbp_url = `http://cdn.espn.com/core/college-football/playbyplay?gameId=${req.params.gameId}&xhr=1&render=false&userab=18`;
             const response = await time(res, 'espn_pbp', () => axios.get(pbp_url));
             const game = response.data["gamepackageJSON"]["header"]["competitions"][0];
