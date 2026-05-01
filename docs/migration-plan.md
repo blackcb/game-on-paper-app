@@ -8,12 +8,14 @@ USER ACTION step without confirmation from the user.**
 
 ## Status
 
-- **Phase 0 — Cloudflare CDN in front (Tier 1)**: not started
+- **Phase 0 — Cloudflare CDN in front (Tier 1)**:
+  - Replica (`sports.unseen-university.org`): **completed 2026-04-30**
+  - Upstream (`gameonpaper.com`): **pending PR #164 merge** + maintainer go-ahead
 - **Phase 1 — Quick-win bug fixes**: not started
 - **Phase 2 — Worker rewrite + KV + Pages (Tier 2)**: not started
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-04-25
+- Last updated: 2026-04-30
 
 ## Resume hint for Claude Code
 
@@ -139,8 +141,76 @@ this is the lowest-risk phase.
 
 ### Notes
 
-_(fill in as you go: registrar used, TTL chosen, TLS mode, what's
-terminating TLS at origin, propagation duration, post-Phase 0 metrics)_
+#### Replica execution (2026-04-30)
+
+Phase 0 was executed against `sports.unseen-university.org` first
+(rather than upstream gameonpaper.com) because the replica is what
+this fork controls and what the migration plan now uses for measuring
+each phase. The same dashboard config will need to be applied to the
+upstream zone after PR #164 merges and the maintainer agrees to the
+direction. The four cache rules and the WAF custom rule transfer
+identically; only the hostname filter changes.
+
+**What was already in place from replica setup**:
+- Cloudflare account, DNS, proxy on `sports`, SSL/TLS Full (strict),
+  Origin Certificate (15 yr), Caddy reverse proxy on origin, UFW
+  locked to CF IP ranges. All from
+  [replica-deploy-plan.md](replica-deploy-plan.md) Phase C.
+- Brotli (`content-encoding: br`) and HTTP/3 (`alt-svc: h3=":443"`)
+  on by default for the zone.
+- 0-RTT enabled by default on Free plans since 2023; verified via
+  TLS connection resumption (no explicit toggle needed).
+
+**What was added in this Phase 0 pass**:
+- **Tiered Cache** → Smart Tiered Cache Topology enabled.
+- **Cache Rules** (4 rules, all on `sports.unseen-university.org`):
+  1. `assets-long-ttl`: URI Path starts with `/assets/` →
+     edge 1h, browser 1d.
+  2. `robots-day-ttl`: URI Path equals `/robots.txt` → edge 1d.
+     Browser TTL not overridden — minor; users re-fetch once per 4h
+     instead of once per 1d. Edge cache (the egress-saving part)
+     still 1d.
+  3. `leaderboards-short-ttl`: URI Path wildcard
+     `/cfb/year/*/teams/*` → edge 5m, browser 1m.
+  4. `team-redirect-cache`: URI Path wildcard `/cfb/teams/*` →
+     edge 5m.
+  - Method filter dropped from rules — Cloudflare only caches safe
+    methods (GET/HEAD) by default; explicit Method clause is
+    redundant in Cache Rules' easy mode (would require expression
+    editor).
+- **WAF custom rule** (`bot-ua-blocklist`): single-rule
+  `lower(http.user_agent) contains <name>` OR'd across the seven UAs
+  from [server.js:17-26](../frontend/server.js#L17). Action: Block.
+  Side effect: the `req.get('User-Agent')` null-crash bug (Phase 1
+  task) no longer matters in production for the replica even before
+  the Phase 1 fix lands.
+
+**Spot-check measurements**:
+
+| Path | Pre-Phase-0 | Post-Phase-0 | Delta |
+|---|---:|---:|---:|
+| `/cfb/year/2024/teams/differential` (warm) TTFB | 113 ms | **49–69 ms** | **−56%** |
+| `/assets/*` browser cache | 4 h (zone default) | **1 day** | 6× longer |
+| Bingbot UA hitting `/cfb/` | reaches origin → 405 | **403 at edge** | origin save |
+| `/robots.txt` | uncached | edge cached, age:86s after 2nd hit | egress save |
+
+HTML pages (`/cfb/`, `/cfb/game/*`) intentionally left as DYNAMIC. HTML
+caching with the current architecture is risky — the scoreboard
+changes during games and the game page embeds live PBP. Phase 2's
+Worker + Cache API approach is what makes safe HTML caching feasible.
+
+**Open follow-up**:
+- robots.txt Browser TTL → "Override – 1 day" (one click). Cosmetic;
+  the egress-saving part already works via the edge cache.
+
+#### Upstream execution (queued)
+
+The same dashboard configuration applies to `gameonpaper.com` once
+PR #164 merges and the maintainer agrees to the migration. All the
+prerequisite work (account setup, DNS migration to CF, TLS Full
+strict, Origin Cert) listed above as ☐ in the original Phase 0 plan
+becomes the actual work for that zone — those steps stay unchecked
+until the upstream cutover happens.
 
 ---
 
