@@ -11,11 +11,15 @@ USER ACTION step without confirmation from the user.**
 - **Phase 0 — Cloudflare CDN in front (Tier 1)**:
   - Replica (`sports.unseen-university.org`): **completed 2026-04-30**
   - Upstream (`gameonpaper.com`): **pending PR #164 merge** + maintainer go-ahead
-- **Phase 1 — Quick-win bug fixes**: not started
+- **Phase 1 — Quick-win bug fixes**:
+  - Replica: **completed 2026-05-01** (16 commits, see Notes)
+  - Upstream: **staged in 4 topic branches locally** (`pr-a-latent-bug-fixes`,
+    `pr-b-caching-wins`, `pr-c-python-compression`, `pr-d-asset-cleanup`);
+    not yet pushed or PR'd pending replica burn-in
 - **Phase 2 — Worker rewrite + KV + Pages (Tier 2)**: not started
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-04-30
+- Last updated: 2026-05-01
 
 ## Resume hint for Claude Code
 
@@ -229,15 +233,15 @@ broken state and the wins are clearly attributable.
 
 #### Python service
 
-- ☐ Add `gunicorn` to [python/requirements.txt](../python/requirements.txt).
-- ☐ Change [python/Dockerfile](../python/Dockerfile) `CMD` to:
+- ☑ Add `gunicorn` to [python/requirements.txt](../python/requirements.txt).
+- ☑ Change [python/Dockerfile](../python/Dockerfile) `CMD` to:
   `gunicorn -w 2 -k gthread --threads 8 --timeout 120 -b 0.0.0.0:7000 app:app`.
   (Two workers because the 4GB memory limit splits to 2GB each — pandas
   pipelines are memory-hungry. Tune after observing.)
-- ☐ Add `flask-compress` to requirements; in [python/app.py](../python/app.py)
+- ☑ Add `flask-compress` to requirements; in [python/app.py](../python/app.py)
   apply `Compress(app)` after creating the Flask app. PBP responses are
   multi-MB JSON that compress 5–10×.
-- ☐ Replace the `KeyError → 404` blanket catch at
+- ☑ Replace the `KeyError → 404` blanket catch at
   [python/app.py:260-269](../python/app.py) with explicit handling for the
   *expected* missing-key case (ESPN returning a malformed payload — usually
   detectable by `pbp["header"]` being absent) and re-raise everything else
@@ -245,34 +249,34 @@ broken state and the wins are clearly attributable.
 
 #### Node frontend
 
-- ☐ `cd frontend && npm i compression`. In
+- ☑ `cd frontend && npm i compression`. In
   [frontend/server.js](../frontend/server.js) add
   `app.use(compression())` before the static handler. EJS responses are
   100KB+ and compress 80–90%.
-- ☐ Fix the User-Agent null crash at [server.js:29](../frontend/server.js):
+- ☑ Fix the User-Agent null crash at [server.js:29](../frontend/server.js):
   `req.get('User-Agent')?.toLocaleLowerCase()?.match(...)` (optional
   chaining + nullish handling). Or delete the middleware entirely once
   Phase 0 moved the rule to WAF.
-- ☐ Add `HEAD` to the allowed methods list in
+- ☑ Add `HEAD` to the allowed methods list in
   [server.js:43-57](../frontend/server.js#L43): currently only `GET` and
   `POST` pass; HEAD requests return 405. Standard HTTP clients (curl
   `-I`, search bots, monitoring) use HEAD for cheap existence checks.
   Either add `"HEAD"` to the allowlist, or drop the method-allowlist
   middleware entirely (let Express's default 404 handle unknown
   methods). Discovered while spot-checking Cloudflare proxy behavior.
-- ☐ Fix the broken POST handler at
+- ☑ Fix the broken POST handler at
   [frontend/cfb/routes.js:490](../frontend/cfb/routes.js): change
   `Games.getPBP(req, res)` → `Games.getPBP(req.params.gameId)`.
-- ☐ Replace SET+EXPIRE pairs in [routes.js](../frontend/cfb/routes.js) and
+- ☑ Replace SET+EXPIRE pairs in [routes.js](../frontend/cfb/routes.js) and
   [games.js](../frontend/cfb/games.js) (lines 110-111, 141-142, 184-185,
   233-234, 295-296) with `redisClient.set(key, val, { EX: ttl })`. Atomic
   + one round trip.
-- ☐ Cap the recursive year fallback at
+- ☑ Cap the recursive year fallback at
   [routes.js:121, 195, 246](../frontend/cfb/routes.js): currently any
   transient axios failure on the summary service triggers up to 11
   recursive retries. Add a retry counter (max 2) and an explicit
   "service unavailable" path for the rest.
-- ☐ Remove the `cacheBuster` query-param suffix from upstream ESPN URLs
+- ☑ Remove the `cacheBuster` query-param suffix from upstream ESPN URLs
   at [routes.js:412-414](../frontend/cfb/routes.js#L412),
   [schedule.js:82](../frontend/cfb/schedule.js#L82), and
   [schedule.js:132](../frontend/cfb/schedule.js#L132). The
@@ -282,7 +286,7 @@ broken state and the wins are clearly attributable.
   unnecessary for current-status data. Confirmed via Day 1 instrumentation:
   on a warm-cache game-page hit, `espn_pbp` was 441 ms because of this
   cache buster; without it, expect ~30 ms.
-- ☐ Invert the cache-vs-ESPN order in the
+- ☑ Invert the cache-vs-ESPN order in the
   [`/cfb/game/:gameId` handler](../frontend/cfb/routes.js#L409): try the
   Redis-cached processed PBP first via `Games.getPBP`, derive game status
   from `data.gameInfo.status.type.name`, and only fall back to a fresh
@@ -292,10 +296,10 @@ broken state and the wins are clearly attributable.
   template (cache doesn't apply for scheduled games). This drops
   `espn_pbp` to 0 on warm hits for completed games — the common case
   by far.
-- ☐ Set `maxmemory-policy allkeys-lru` (or `allkeys-lfu`) on
+- ☑ Set `maxmemory-policy allkeys-lru` (or `allkeys-lfu`) on
   [redis/cache.conf](../redis/cache.conf). Currently it has no eviction
   policy and returns OOM on overflow.
-- ☐ Fix the cache container's healthcheck in
+- ☑ Fix the cache container's healthcheck in
   [docker-compose.do.yml](../docker-compose.do.yml): currently
   `redis-cli ping`, which defaults to port 6379. The cache instance
   only listens on port 6380 (per
@@ -303,7 +307,7 @@ broken state and the wins are clearly attributable.
   fails and the container shows as `(unhealthy)` forever. Should be
   `redis-cli -p 6380 ping`. Discovered while standing up the fork's
   replica ([replica-deploy-plan.md](replica-deploy-plan.md) Phase B Notes).
-- ☐ Wrap the upstream calls in
+- ☑ Wrap the upstream calls in
   [`getServiceHealth` in games.js:219](../frontend/cfb/games.js#L219) in a
   try/catch. As written, an `ECONNREFUSED` from python (e.g. python is
   starting up, slower than node's first healthcheck) becomes an
@@ -311,20 +315,21 @@ broken state and the wins are clearly attributable.
   Node 24+. The fork's compose file works around this with
   `depends_on: condition: service_healthy` + `restart: unless-stopped`,
   but the real fix is in the route handler.
-- ☐ `cd frontend && npm i axios@^1` to upgrade past CVE-vulnerable 0.21.1.
+- ☑ `cd frontend && npm i axios@^1` to upgrade past CVE-vulnerable 0.21.1.
   Verify the PBP and ESPN axios calls still work.
 
 #### Asset cleanup
 
-- ☐ Delete `frontend/public/assets/js/bootstrap.{esm,esm.min,bundle,js,bundle.min,min}.js.map`
+- ☑ Delete `frontend/public/assets/js/bootstrap.{esm,esm.min,bundle,js,bundle.min,min}.js.map`
   and the duplicate non-min variants. Keep only
   `bootstrap.bundle.min.js` and its map (or delete the map too in prod).
-- ☐ Same for `bootstrap.css.map`, `bootstrap-grid.*.map`, etc. in
+- ☑ Same for `bootstrap.css.map`, `bootstrap-grid.*.map`, etc. in
   [frontend/public/assets/css](../frontend/public/assets/css).
-- ☐ Replace the 1.1MB `favicon.svg` with a properly-sized SVG (target
+- ☑ Replace the 1.1MB `favicon.svg` with a properly-sized SVG (target
   <50KB) or remove the SVG link and rely on the existing `.ico`/PNGs.
-- ☐ Verify total `frontend/public/` size dropped from ~17MB to ~3MB.
-- ☐ `git add -p` and commit each fix separately so Phase 0's CDN
+  Took the second path — `head.ejs` only references `favicon.ico`.
+- ☑ Verify total `frontend/public/` size dropped from ~17MB to ~3MB.
+- ☑ `git add -p` and commit each fix separately so Phase 0's CDN
   improvements vs Phase 1's code improvements are distinguishable in
   metrics later.
 
@@ -340,8 +345,65 @@ broken state and the wins are clearly attributable.
 
 ### Notes
 
-_(fill in as you go: gunicorn worker count chosen, any tests that broke
-during the cleanup, redis OOM observations)_
+#### Replica execution (2026-05-01)
+
+All 16 fixes deployed to the replica via `instrument-plus-cloudflare-cdn`
+on `sports.unseen-university.org`. Each fix is one commit so they can be
+cherry-picked independently for upstream PRs.
+
+**Decisions made**:
+- gunicorn: `-w 2 -k gthread --threads 8 --timeout 120` as planned. Two
+  workers fits the 4 GB compose memory cap with headroom for the pandas
+  pipeline's 1–2 GB peak.
+- favicon: removed the SVG `<link>` instead of compressing — the `.ico`
+  was already wired up and the SVG was unreferenced (1.1 MB pure dead
+  weight). Cheaper than producing a new SVG.
+- HEAD method: added to allowlist rather than dropping the middleware
+  entirely, since the bot UA blocklist still runs there in case the WAF
+  rule is ever disabled.
+- redis maxmemory-policy: `allkeys-lru` (over `allkeys-lfu`) — matches
+  the existing LRU instance's policy and the access pattern (recent
+  games dominate).
+- Cache-first inversion: kept the in-progress freshness window at 30 s.
+  Anything tighter caused live games to flicker; anything looser risked
+  stale scoreboards. This is the heuristic to revisit if the upstream
+  PR review pushes back.
+
+**Measured impact** (full table in [perf-plan.md](perf-plan.md) under
+"After Phase 1"):
+- Warm game-page server-side latency 292 ms → 45 ms (84% drop) — driven
+  almost entirely by cache-first inversion + cacheBuster removal.
+- `/cfb/year/.../differential` TTFB 113 ms baseline → 47 ms post-Phase-1.
+- `/cfb/` TTFB regressed 101 ms → 153 ms — gzip CPU cost on a 315 KB
+  HTML body. Net win on mobile (~1.5 s saved on Slow 4G); wash on
+  desktop. Worth a Mobile lhci run before tightening thresholds.
+- Curl-visible page weight unchanged (CF was already brotli-encoding
+  for the baseline measurement; origin gzip helps origin→CF only).
+- Lighthouse Desktop perf scores essentially flat — the wins are in
+  Server-Timing and concurrency, not in single-request lhci.
+
+**Test posture**:
+- Python: `pytest -m "not integration"` 9 passed, 1 deselected.
+- Frontend: no broken Playwright runs observed; LHCI ran 9 reports
+  cleanly (3 URLs × 3 runs).
+- Live spot-checks on game / scoreboard / leaderboard all rendered.
+
+**Upstream PR staging** (not yet pushed):
+- `pr-a-latent-bug-fixes` — 4 commits: HEAD allow, UA null guard,
+  getServiceHealth try/catch, broken POST handler. +47 −16.
+- `pr-b-caching-wins` — 5 commits: cacheBuster removal, cache-first
+  inversion, SET+EXPIRE → atomic SET EX, recursive-fallback cap, redis
+  maxmemory + healthcheck port. +106 −47.
+- `pr-c-python-compression` — 4 commits: gunicorn, flask-compress,
+  KeyError tightening, Express compression middleware. +68 −14.
+- `pr-d-asset-cleanup` — 3 commits: bootstrap variants/maps,
+  favicon.svg, axios 0.21 → ^1. +1 −58,828.
+
+Cherry-picks required conflict resolution to strip the perf-plan Day 1
+instrumentation helpers (`time(...)`, `_emit_metrics`,
+`_server_timing_header`, `timingMiddleware`) — those don't exist on
+upstream/main, so the upstream PRs ship plain function calls. Lockfile
+also stripped (upstream doesn't track `package-lock.json`).
 
 ---
 
