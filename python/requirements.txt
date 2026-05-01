@@ -1,5 +1,11 @@
 Flask==3.1.2
 Werkzeug==3.1.5
+# Production WSGI server. The previous CMD `python app.py` ran Flask's
+# built-in dev server, which is single-threaded and explicitly NOT for
+# production — concurrent requests serialized end-to-end. Two gthread
+# workers × 8 threads each gives reasonable parallelism within the
+# python container's 4 GB memory ceiling.
+gunicorn>=23,<24
 # Pinned tightly because EP/WP/QBR model output is sensitive to xgboost
 # minor versions; snapshot tests in python/tests/test_process_snapshot.py
 # would diff if this drifts. Bump in lockstep with regenerated fixtures.
