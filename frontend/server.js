@@ -50,7 +50,12 @@ const BANNED_USER_AGENT_LIST = [
 const BANNED_USER_AGENT_LIST_REGEX = new RegExp(BANNED_USER_AGENT_LIST.join("|"))
 
 app.use((req, res, next) => {
-    if (req.get('User-Agent').toLocaleLowerCase().match(BANNED_USER_AGENT_LIST_REGEX)) {
+    // `req.get('User-Agent')` is undefined when the client sends no UA
+    // header (curl with no `-A`, some health checks, hand-rolled clients).
+    // Calling `.toLocaleLowerCase()` on undefined threw a TypeError and
+    // 500'd the request — optional chaining keeps the middleware safe and
+    // lets the request fall through to the normal handler.
+    if (req.get('User-Agent')?.toLocaleLowerCase()?.match(BANNED_USER_AGENT_LIST_REGEX)) {
         return res.status(429).json({
             status: 429,
             message: "Too many requests."
