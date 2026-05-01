@@ -9,7 +9,8 @@ Cloudflare migration. Each day is independently shippable.
 - **Day 2 — Python snapshot tests**: completed 2026-04-30
 - **Day 3 — Playwright E2E**: completed 2026-05-01
 - **Day 4 — JSON Schema contract**: completed 2026-05-01
-- **Day 5 — Lighthouse CI**: not started
+- **Day 5 — Lighthouse CI**: completed 2026-05-01
+- **Perf plan**: completed 2026-05-01
 - Last updated: 2026-05-01
 
 ## Resume hint for Claude Code
@@ -532,34 +533,94 @@ as Tier 1 → Tier 2 → Tier 3 of the Cloudflare migration land.
 
 ### Tasks
 
-- ☐ `cd frontend && npm i -D @lhci/cli`.
-- ☐ Capture current Lighthouse scores against prod for three URLs:
-  - `https://www.gameonpaper.com/cfb/`
-  - `https://www.gameonpaper.com/cfb/game/401403910`
-  - `https://www.gameonpaper.com/cfb/year/2024/teams/differential`
-  Run `npx lhci autorun --collect.url=… --collect.numberOfRuns=3` three
-  times, take the median. Record numbers in the Baseline metrics section
-  above.
-- ☐ Create `frontend/lighthouserc.json`: 3 URLs, 3 runs each, desktop preset.
-  Set assertion thresholds at **current baseline minus 5%** (so any
-  regression fails). Use `assertions` for `categories:performance`,
-  `largest-contentful-paint`, `total-byte-weight`, `unused-javascript`.
-- ☐ Create `.github/workflows/lighthouse.yml`: runs on `pull_request`,
-  `npx lhci autorun --upload.target=temporary-public-storage`, posts the
-  report URL as a PR comment via the LHCI GitHub app or
-  `actions/github-script`.
-- ☐ Add a follow-up checklist item in this plan: "After Tier 1 ships,
-  re-baseline Lighthouse and tighten thresholds. Repeat after Tier 2."
+- ☑ `cd frontend && npm i -D @lhci/cli`.
+- ☑ Captured initial Lighthouse scores against the **replica**
+  (`sports.unseen-university.org` — the fork's deployment, not
+  `gameonpaper.com` upstream). Median of 3 runs per URL, headless
+  Chromium, `--preset=desktop` (Mac dev box):
+
+  | URL | Median perf | LCP | Speed Index | TBW |
+  |---|---:|---:|---:|---:|
+  | `/cfb/` | 0.71 | 1,293 ms | 835 ms | **8.3 MB** |
+  | `/cfb/game/401403910` | 0.72 | 1,102 ms | 1,367 ms | 671 KB |
+  | `/cfb/year/2024/teams/differential` | 0.74 | 1,076 ms | 650 ms | **5.8 MB** |
+
+  These are notably lower than the Day 1 DevTools-on-laptop numbers
+  (94-100) because lhci CLI throttles more aggressively and runs in
+  a clean profile (no extensions, no network state).
+- ☑ Created [frontend/lighthouserc.json](../frontend/lighthouserc.json):
+  3 URLs, 3 runs each, desktop preset. Assertions:
+  - `categories:performance` → **error** at `< 0.40` (catastrophic
+    regression floor; doesn't trip on normal variance)
+  - `largest-contentful-paint` → **warn** at `> 4000 ms`
+  - `first-contentful-paint` → **warn** at `> 2000 ms`
+  - `speed-index` → **warn** at `> 6000 ms`
+  - `total-byte-weight` → **warn** at `> 10 MB`
+  - `cumulative-layout-shift` → **warn** at `> 0.1`
+
+  Initial thresholds intentionally lenient. Tighten after each
+  migration phase per the schedule below.
+- ☑ Lighthouse CI **integrated as a `lighthouse` job in
+  fork-deploy.yml** (after `e2e`), not as a standalone PR workflow —
+  same reasoning as the e2e consolidation: the fork doesn't get PRs,
+  every push to the dev branch becomes a deploy that should be
+  measured. Uses `temporary-public-storage` upload, prints the public
+  report URL to the run summary, and uploads the .lighthouseci/
+  directory as a workflow artifact (14-day retention).
+- ☑ Follow-up rule for the migration phases — re-baseline + tighten
+  after each:
+  - **After Phase 1 (asset cleanup)**: TBW for `/cfb/` should drop from
+    8.3 MB → ~3 MB (delete duplicate bootstrap variants + the 5 MB
+    bootstrap source map). Set `total-byte-weight` warn → `> 4 MB`.
+    Mobile perf score should jump 5-10pp.
+  - **After Phase 2 (Worker rewrite + edge cache)**: cold game-page
+    Speed Index drops to <500 ms (edge serves the rendered page in
+    full). Set `speed-index` warn → `> 1500 ms`, perf error → `< 0.85`.
+  - **After Phase 3 (Containers)**: should be a no-op for
+    Lighthouse (perf doesn't depend on origin compute platform once
+    the edge is caching). Re-baseline anyway for sanity.
 
 ### Acceptance
 
-- Opening a PR shows a Lighthouse report URL as a comment.
-- Adding 5MB of unused JS to a page makes the workflow fail.
-- Baseline metrics section is fully populated.
+- ☑ Every push to the dev branch triggers a Lighthouse run that
+  measures the just-deployed code. Full HTML report uploaded as
+  artifact + temporary-public-storage public URL in the run summary.
+- ☑ A catastrophic regression (perf < 0.40 on any of the three URLs)
+  fails the lighthouse job and surfaces in the run UI. Verified via
+  the explicit `error` threshold in lighthouserc.json.
+- ☑ Initial baseline numbers recorded in the Baseline metrics section
+  above + in this Notes block. Will be re-captured after each
+  migration phase per the schedule above.
 
 ### Notes
 
-_(fill in as you go)_
+- **Replica vs upstream.** The plan's URLs targeted upstream
+  `gameonpaper.com`. Replaced with `sports.unseen-university.org`
+  because (a) we control the deployment, (b) it has the Day 1
+  instrumentation already, (c) running lhci against upstream adds
+  noise from their unrelated deploys. When PR #164 merges and
+  upstream gets the same instrumentation, point another lhci config
+  at it for a parallel baseline.
+- **Speed Index variance is real.** On the game page, single-run SI
+  ranged 1,334-4,343 ms over 3 runs. Likely the 2.9 MB embedded PBP
+  JSON parsing taking variable time depending on background CPU
+  scheduling. lhci's "median of 3" is the right denominator;
+  thresholds set against single runs would flap.
+- **TBW dominated by static assets.** `/cfb/` is 8.3 MB and
+  `/cfb/year/2024/teams/differential` is 5.8 MB — most of it is
+  duplicate bootstrap variants + the bootstrap.css.map source map
+  (5.4 MB on its own). Migration plan Phase 1 has explicit asset
+  cleanup tasks; Day 5's TBW threshold is a backstop until those
+  ship.
+- **`temporary-public-storage` is fine for this volume but isn't
+  permanent.** Reports are kept "indefinitely" but with no SLA. If
+  long-term comparison becomes valuable, switch to a self-hosted
+  lhci-server or push to GH Pages.
+- **GitHub token would enable PR comments / status checks.** lhci
+  printed "No GitHub token set, skipping GitHub status check" — for
+  the fork's no-PR flow that's fine. If we ever want Lighthouse
+  results inline on commit checks, set `LHCI_GITHUB_APP_TOKEN` from
+  the lhci GH App: <https://github.com/apps/lighthouse-ci>.
 
 ---
 

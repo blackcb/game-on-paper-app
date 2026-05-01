@@ -24,6 +24,10 @@ frontend/blob-report/
 frontend/.last-run.json
 frontend/playwright/.cache/
 
+# Lighthouse CI local artifacts (regenerated on every run; CI uploads
+# to temporary-public-storage instead)
+frontend/.lighthouseci/
+
 # Python venv (per-developer, never committed)
 python/.venv/
 python/.pytest_cache/

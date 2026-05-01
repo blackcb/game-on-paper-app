@@ -201,3 +201,47 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 14
+
+  lighthouse:
+    # Runs after e2e — deployed code has already been smoke-tested by
+    # Playwright by the time Lighthouse measures it. lhci scores are
+    # warn-only by default with a single error-level floor at perf=0.40
+    # (see frontend/lighthouserc.json); won't block deploy in practice
+    # but produces a public report URL for every run.
+    needs: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Run Lighthouse CI
+        run: |
+          set -o pipefail
+          {
+            echo '## lighthouse output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          npx lhci autorun 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Upload Lighthouse artifacts
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-report
+          path: frontend/.lighthouseci/
+          retention-days: 14
