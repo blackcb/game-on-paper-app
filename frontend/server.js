@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const morgan = require("morgan");
 const { spawn } = require('child_process');
 const cfb = require('./cfb/routes.js');
@@ -16,6 +17,12 @@ const debuglog = util.debuglog('[frontend]');
 const LOG_INCLUDE_PII = process.env.LOG_INCLUDE_PII !== 'false';
 
 const app = express();
+// gzip every text-y response body. The big wins here are SSR'd HTML
+// for /cfb/game/:id (the play table inline JSON balloons the page to
+// 200-400 KB uncompressed) and the JSON returned to AJAX callers.
+// Default 1 KB threshold leaves small responses uncompressed, which
+// is what we want for redirects and tiny error pages.
+app.use(compression());
 app.use(morgan(function (tokens, req, res) {
     const line = {
         event: 'access',
