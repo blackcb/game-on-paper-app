@@ -93,7 +93,17 @@ async function retrieveGameList(url, params) {
     return gameList;
 }
 
-async function retrieveRemotePercentiles(year = null, pctile = null) {
+// Cap year-1 fallback recursion at 2 hops. Pre-cap, any transient
+// summary-service hiccup (a 502, a TLS reset, anything that throws)
+// would walk the year backward all the way to 2014 — up to 11
+// recursive HTTP calls per page load — before giving up. That
+// amplified a 1s blip into a 10s page load and saturated the summary
+// container during incidents. Two retries lets us absorb the
+// genuine "data isn't available yet for this season" case at the
+// start of a season without DOSing on transient failures.
+const REMOTE_YEAR_RETRY_BUDGET = 2;
+
+async function retrieveRemotePercentiles(year = null, pctile = null, retriesRemaining = REMOTE_YEAR_RETRY_BUDGET) {
     if (!year && !pctile) {
         console.error(`failed to retreive percentiles, must provide 'year' AND/OR 'pctile'`)
         return [];
@@ -104,7 +114,7 @@ async function retrieveRemotePercentiles(year = null, pctile = null) {
             method: 'GET',
             url: `http://summary:3000/percentiles?` + (new URLSearchParams(query)).toString(),
         });
-        
+
         // update redis cache
         const content = response.data.results;
         const key = generateKey([year, "percentiles", pctile]);
@@ -114,15 +124,11 @@ async function retrieveRemotePercentiles(year = null, pctile = null) {
         await redisClient.set(key, JSON.stringify(content), { EX: 60 * 60 * 24 * 3 })
         return content;
     } catch (err) {
-        console.log(`could not find percentiles (${pctile}) for league in ${year}, checking ${year - 1}`)
-        if (err) {
-            console.log(`also err: ${err}`);
-        }
-        if ((year - 1) < 2014) {
+        console.log(`could not find percentiles (${pctile}) for league in ${year}, retries remaining: ${retriesRemaining}, err: ${err.message}`)
+        if (retriesRemaining <= 0 || (year - 1) < 2014) {
             return [];
-        } else {
-            return await retrieveRemotePercentiles(year - 1, pctile);
         }
+        return await retrieveRemotePercentiles(year - 1, pctile, retriesRemaining - 1);
     }
 }
 
@@ -172,33 +178,26 @@ async function retrieveRemoteData(payload) {
     return content;
 }
 
-async function retrieveRemoteLeagueData(year, type) {
+async function retrieveRemoteLeagueData(year, type, retriesRemaining = REMOTE_YEAR_RETRY_BUDGET) {
     if (!year && !type) {
         console.error(`failed to retreive remote league data, must provide 'year' AND/OR 'type'`)
         return [];
     }
-    try {        
+    try {
         // update redis cache
         const content = await retrieveRemoteData({
             year,
             type: type
         });
         const key = `${year}-${type}`;
-        // SETEX-equivalent: atomic write+TTL in one round trip vs the
-        // previous SET-then-EXPIRE pair (two RTTs, with a window in
-        // between where the key existed without a TTL).
         await redisClient.set(key, JSON.stringify(content), { EX: 60 * 60 * 24 * 3 })
         return content;
     } catch (err) {
-        console.log(`could not find data for league in ${year}, checking ${year - 1}`)
-        if (err) {
-            console.log(`also err: ${err}`);
-        }
-        if ((year - 1) < 2014) {
+        console.log(`could not find data for league in ${year}, retries remaining: ${retriesRemaining}, err: ${err.message}`)
+        if (retriesRemaining <= 0 || (year - 1) < 2014) {
             return [];
-        } else {
-            return await retrieveRemoteLeagueData(year - 1, type);
         }
+        return await retrieveRemoteLeagueData(year - 1, type, retriesRemaining - 1);
     }
 }
 
@@ -222,7 +221,7 @@ async function retrieveLeagueData(year, type) {
     }
 }
 
-async function retrieveRemoteTeamData(year, team_id, type) {
+async function retrieveRemoteTeamData(year, team_id, type, retriesRemaining = REMOTE_YEAR_RETRY_BUDGET) {
     if (!year && !team_id) {
         console.error(`failed to retreive remote team data, must provide 'year' AND/OR 'team_id'`)
         return [];
@@ -235,23 +234,14 @@ async function retrieveRemoteTeamData(year, team_id, type) {
             type: type
         });
         const key = generateKey([year, team_id, type]);
-        // SETEX-equivalent: atomic write+TTL in one round trip vs the
-        // previous SET-then-EXPIRE pair (two RTTs, with a window in
-        // between where the key existed without a TTL).
         await redisClient.set(key, JSON.stringify(content), { EX: 60 * 60 * 24 * 3 })
         return content;
     } catch (err) {
-        console.log(`could not find data for ${team_id} in ${year}, checking ${year - 1}`)
-        if (err) {
-            console.log(`also err: ${err}`);
+        console.log(`could not find data for ${team_id} in ${year}, retries remaining: ${retriesRemaining}, err: ${err.message}`)
+        if (retriesRemaining <= 0 || (year - 1) < 2014) {
+            return [{ pos_team: team_id }];
         }
-        if ((year - 1) < 2014) {
-            return [{
-                pos_team: team_id
-            }];
-        } else {
-            return await retrieveRemoteTeamData(year - 1, team_id, type);
-        }
+        return await retrieveRemoteTeamData(year - 1, team_id, type, retriesRemaining - 1);
     }
 }
 
