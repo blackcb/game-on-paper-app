@@ -1,5 +1,6 @@
 const axios = require('axios');
 const util = require('util');
+const debuglog = util.debuglog('[frontend]');
 const Schedule = require('./schedule');
 const redis = require('redis');
 const { time } = require('./timing.js');
@@ -256,22 +257,40 @@ async function processPlays(gameId, res) {
 }
 
 async function getServiceHealth(req, res) {
-    const rdataCheck = await axios.get(RDATA_BASE_URL + '/healthcheck');
-    const cfbDataCheck = await axios.get('https://collegefootballdata.com');
-
-    var cfbdCheck = {
-        status: (cfbDataCheck.status == 200) ? "ok" : "bad"
+    // Wrap each upstream call in its own try so the route never crashes
+    // the process if either dependency is briefly unreachable. Pre-fix,
+    // an `ECONNREFUSED` from python (e.g. python container is still
+    // starting and node's docker healthcheck races it on boot) became
+    // an unhandled promise rejection — Node 24+ treats that as fatal
+    // and the node process exited with code 1, taking the entire
+    // frontend down on startup. The fork's compose file masked this
+    // with `depends_on: condition: service_healthy` plus
+    // `restart: unless-stopped`, but the real fix is here.
+    let rdataPayload = { status: "bad" };
+    try {
+        const rdataCheck = await axios.get(RDATA_BASE_URL + '/healthcheck', {
+            timeout: 5000,
+        });
+        rdataPayload = rdataCheck.data;
+    } catch (e) {
+        debuglog(`/cfb/healthcheck: python upstream failed: ${e.message}`);
     }
 
-    const selfCheck = {
-        "status" : "ok"
+    let cfbdCheck = { status: "bad" };
+    try {
+        const cfbDataCheck = await axios.get('https://collegefootballdata.com', {
+            timeout: 5000,
+        });
+        cfbdCheck.status = (cfbDataCheck.status == 200) ? "ok" : "bad";
+    } catch (e) {
+        debuglog(`/cfb/healthcheck: collegefootballdata upstream failed: ${e.message}`);
     }
-    
+
     return res.json({
-        "python" : rdataCheck.data,
-        "node" : selfCheck,
+        "python" : rdataPayload,
+        "node" : { "status" : "ok" },
         "cfbData" : cfbdCheck
-    })
+    });
 }
 
 exports.getGameList = getSchedule
