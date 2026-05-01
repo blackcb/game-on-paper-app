@@ -8,7 +8,7 @@ Cloudflare migration. Each day is independently shippable.
 - **Day 1 — Baseline observability**: completed 2026-04-28
 - **Day 2 — Python snapshot tests**: completed 2026-04-30
 - **Day 3 — Playwright E2E**: completed 2026-05-01
-- **Day 4 — JSON Schema contract**: not started
+- **Day 4 — JSON Schema contract**: completed 2026-05-01
 - **Day 5 — Lighthouse CI**: not started
 - Last updated: 2026-05-01
 
@@ -417,42 +417,109 @@ and Node validate against it; drift fails CI.
 
 ### Tasks
 
-- ☐ Add `pydantic>=2` to [python/requirements.txt](../python/requirements.txt).
-- ☐ Create `python/schemas.py` with a `ProcessResponse` pydantic model
-  covering the keys produced at [python/app.py:232-257](../python/app.py).
-  Cover at minimum: `id`, `count`, `plays[]` (with nested `clock`, `type`,
-  `start`, `end`, `winProbability`, `expectedPoints`, `modelInputs`),
-  `box_score`, `homeTeamId`, `awayTeamId`, `header`, `drives`,
-  `scoringPlays`, `winprobability`, `pickcenter`, `homeTeamSpread`,
-  `overUnder`. Use `Optional` liberally — ESPN payloads are inconsistent.
-- ☐ In [python/app.py](../python/app.py) `/cfb/process`, validate `result`
-  with `ProcessResponse.model_validate(result)` before `jsonify`. Behavior
-  controlled by env var `STRICT_SCHEMA`: `1` raises (used in tests), default
-  warns and continues (used in prod). Log validation failures structured.
-- ☐ Add a `make schema` target (or `python/Makefile`) that runs
-  `python -c "from schemas import ProcessResponse; import json; print(json.dumps(ProcessResponse.model_json_schema(), indent=2))" > shared/process-response.schema.json`.
-  Commit `shared/process-response.schema.json`.
-- ☐ `cd frontend && npm i ajv ajv-formats`. In
-  [frontend/cfb/games.js `_remoteRetrievePBP`](../frontend/cfb/games.js),
-  load the schema once at module init, validate the response from Python,
-  log a structured warning on mismatch (don't block — warn-only for now).
-- ☐ Extend the snapshot test from Day 2: assert each fixture's
-  `expected.json` validates against `shared/process-response.schema.json`
-  using `jsonschema` in Python.
-- ☐ Add a CI step that re-generates the schema and fails if the committed
-  file is out of date (`git diff --exit-code shared/process-response.schema.json`).
+- ☑ Added `pydantic>=2,<3` to
+  [python/requirements.txt](../python/requirements.txt).
+- ☑ Created [python/schemas.py](../python/schemas.py) with a
+  `ProcessResponse` pydantic model covering the contract: `id`, `count`,
+  `plays[]` (with `clock`, `type`, `modelInputs`, `expectedPoints`,
+  `winProbability`, `start`, `end` strict sub-models), `box_score`,
+  `homeTeamId`, `awayTeamId`, `header`, `drives`, `scoringPlays`,
+  `winprobability`, `pickcenter`, `homeTeamSpread`, `overUnder`,
+  `broadcasts`, `videos`, `standings`, `espnWinProbability`, `gameInfo`,
+  `season`, `boxScore`. Every model uses `extra='allow'` so the ~370
+  pandas DataFrame columns per play don't fail validation.
+- ☑ Wired into [python/app.py](../python/app.py) `/cfb/process`. Behavior
+  controlled by `STRICT_SCHEMA` env var: `=1` raises ValidationError (set
+  in `conftest.py` for tests); default warns + continues with a
+  structured `schema_validation_failure` event line on `app.metrics`.
+  Logging is wrapped in try/except so a bad logger config can't 500 a
+  good response.
+- ☑ Added [python/scripts/dump_schema.py](../python/scripts/dump_schema.py)
+  that writes the JSON Schema to **two** locations:
+  `shared/process-response.schema.json` (canonical, repo root, for
+  cross-service tooling) and
+  `frontend/cfb/process-response.schema.json` (inside the frontend
+  Docker build context — what `games.js` actually `require()`s at
+  runtime). Why two: the frontend container is built from `./frontend`
+  context, so a `shared/` file at repo root isn't reachable from inside
+  the image; the dump script keeps both in sync, CI verifies they're
+  identical and match `schemas.py`.
+- ☑ `cd frontend && npm i ajv ajv-formats`. Wired into
+  [frontend/cfb/games.js `processPlays`](../frontend/cfb/games.js) — the
+  validator is compiled once at module init (`ajv.compile()`, ~10ms),
+  then runs on every Python response. Warn-only on mismatch: structured
+  JSON line to stdout (`event: schema_validation_failure`,
+  `source: node`, first 5 errors). Defense-in-depth — Python is the
+  canonical validator, Node catches drift in production where Python
+  isn't running with `STRICT_SCHEMA`.
+- ☑ Snapshot tests extended: new
+  `test_fixture_validates_against_schema` asserts each committed
+  `expected.json` validates against `ProcessResponse`. Catches
+  hand-edited fixtures that drift from the schema, and vice versa.
+- ☑ Added schema-freshness check to
+  [.github/workflows/test.yml](../.github/workflows/test.yml): regenerates
+  the two schema files via `python scripts/dump_schema.py` and fails
+  with `git diff --exit-code` if either drifted.
 
 ### Acceptance
 
-- Renaming a field in [python/app.py:82-205](../python/app.py) reshape
-  fails Python validation in tests AND triggers a Node warning log against
-  prod.
-- The committed `shared/process-response.schema.json` matches what
-  `make schema` produces.
+- ☑ Renaming a field in [python/app.py:82-205](../python/app.py) reshape
+  fails Python validation in tests AND triggers a Node warning log
+  against prod (verified manually: `STRICT_SCHEMA=1` raises, default
+  emits a `schema_validation_failure` log line).
+- ☑ The committed schema files match what `dump_schema.py` produces
+  (CI's `git diff --exit-code` step enforces).
 
 ### Notes
 
-_(fill in as you go)_
+- **Schema lives in two places.** `shared/process-response.schema.json`
+  is canonical; `frontend/cfb/process-response.schema.json` is a
+  byte-identical copy that lives inside the frontend Docker build
+  context so `games.js` can `require()` it at runtime. Don't edit
+  either by hand — `python scripts/dump_schema.py` writes both.
+- **`extra='allow'` everywhere is intentional.** The /cfb/process
+  response carries ~370 columns per play from the pandas DataFrame
+  that we don't (and shouldn't) enumerate in the schema. The contract
+  is the *reshape blocks* (`clock`, `type`, `modelInputs`, etc.) and
+  the top-level keys; everything else passes through.
+- **Two-stage validation** is intentional belt-and-suspenders:
+  - **Python `pydantic`** (raise under `STRICT_SCHEMA=1`, warn otherwise)
+    is the contract author. CI tests run with `STRICT_SCHEMA=1` so any
+    drift in the Python side fails fast. Production runs warn-only so
+    a novel ESPN payload doesn't 500.
+  - **Node `ajv`** (always warn-only) catches Python-side drift that
+    slips past production validation. If the Node frontend ever starts
+    seeing `schema_validation_failure` events in prod logs, it's the
+    canary for sportsdataverse / app.py drift.
+- **Two CI improvements rolled in alongside Day 4:**
+  - **`test.yml` switched to `python:3.14-slim` container.** Was using
+    `actions/setup-python@v5`; that build's pytest collection failed in
+    a way that didn't reproduce in the official Docker image. Switching
+    to a container with the same image used locally (and identical to
+    the production python container's base) made CI behavior match
+    local-Linux behavior.
+  - **Test workflow's pytest stdout now mirrors to
+    `$GITHUB_STEP_SUMMARY`**, so failures are debuggable from the
+    public run page even without log-access permissions. Helped
+    diagnose the receiver-list ordering issue below.
+- **Receiver-list ordering platform diff.** When CI first ran the Day 2
+  snapshot tests, they failed with ~40 "diffs" per game in
+  `box_score.receiver` — but the diffs weren't real value drift; they
+  were the same set of receivers in different orders. pandas
+  groupby/sort tie-break is platform-dependent (libc qsort
+  implementation differs Mac vs Linux). Fix landed in two parts:
+  (a) regenerated all three fixtures inside the same `linux/amd64`
+  container CI uses, so committed fixtures are linux-canonical;
+  (b) added order-tolerant comparison to `_diffs` — when comparing
+  list-of-dicts, sort both by canonical-JSON key first. Lists of
+  scalars (`winprobability`, `scoringPlays`) keep their original order
+  since temporal ordering is meaningful there. Tests now pass on
+  both Mac and Linux.
+- **Float tolerance survived from Day 2.** The earlier `math.isclose`
+  with `abs_tol=1e-5, rel_tol=1e-6` still absorbs xgboost's
+  ~6e-8 SIMD-reordering noise across architectures. Combined with the
+  list-sort tolerance above, snapshot tests are now genuinely
+  platform-independent.
 
 ---
 

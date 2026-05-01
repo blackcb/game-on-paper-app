@@ -45,6 +45,17 @@ _FLOAT_ABS_TOL = 1e-5
 _FLOAT_REL_TOL = 1e-6
 
 
+def _canonical_key(item: Any) -> str:
+    """Stable sortable key for ordering list-of-dict elements.
+
+    Used so list-of-dict comparisons are order-independent: pandas
+    groupby + tie-break ordering varies across platforms (Mac vs Linux,
+    libc differences) and produces the same set of records in different
+    orders. We care about the records' contents, not their position.
+    """
+    return json.dumps(item, sort_keys=True, default=str)
+
+
 def _diffs(a: Any, b: Any, path: str = "") -> Iterator[str]:
     """Yield human-readable diff descriptions between two JSON-shaped values."""
     # Match floats with tolerance. NaN-equal-NaN to avoid spurious diffs on
@@ -72,11 +83,40 @@ def _diffs(a: Any, b: Any, path: str = "") -> Iterator[str]:
         if len(a) != len(b):
             yield f"{path}: list length {len(a)} != {len(b)}"
             return
-        for i, (x, y) in enumerate(zip(a, b)):
-            yield from _diffs(x, y, f"{path}[{i}]")
+        # When comparing a list of dicts, sort both by canonical JSON
+        # so platform-dependent groupby orderings (e.g. pandas tie-break
+        # on Mac vs Linux) don't surface as fake diffs. Lists of scalars
+        # keep their original order — list[float] order is meaningful in
+        # this codebase (winprobability time series, scoringPlays).
+        if a and all(isinstance(x, dict) for x in a) and all(isinstance(x, dict) for x in b):
+            a_sorted = sorted(a, key=_canonical_key)
+            b_sorted = sorted(b, key=_canonical_key)
+            for i, (x, y) in enumerate(zip(a_sorted, b_sorted)):
+                yield from _diffs(x, y, f"{path}[{i}]")
+        else:
+            for i, (x, y) in enumerate(zip(a, b)):
+                yield from _diffs(x, y, f"{path}[{i}]")
         return
     if a != b:
         yield f"{path}: {a!r} != {b!r}"
+
+
+@pytest.mark.parametrize("game_id", SNAPSHOT_GAME_IDS)
+def test_fixture_validates_against_schema(game_id):
+    """Each committed expected.json must validate against the published schema.
+
+    Catches the case where someone hand-edits a fixture but forgets to
+    regenerate the schema, or vice versa. A failure here means the
+    schema and the fixture have drifted and one of them needs updating.
+    """
+    from schemas import ProcessResponse
+
+    fixtures_dir = FIXTURES_DIR / str(game_id)
+    expected = json.loads(
+        (fixtures_dir / "expected.json").read_text(encoding="utf-8")
+    )
+    # If validation fails, ValidationError surfaces a precise diff.
+    ProcessResponse.model_validate(expected)
 
 
 @pytest.mark.parametrize("mock_espn", SNAPSHOT_GAME_IDS, indirect=True)

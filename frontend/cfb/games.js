@@ -3,7 +3,24 @@ const util = require('util');
 const Schedule = require('./schedule');
 const redis = require('redis');
 const { time } = require('./timing.js');
+const Ajv = require('ajv').default || require('ajv');
+const ajvFormats = require('ajv-formats').default || require('ajv-formats');
+const processResponseSchema = require('./process-response.schema.json');
 const RDATA_BASE_URL = process.env.RDATA_BASE_URL;
+
+// Compile the /cfb/process schema once at module init. ~10ms one-time
+// cost vs. compiling on every request. `strict: false` because the schema
+// uses additionalProperties:true everywhere (the response carries the
+// pandas DataFrame's ~370 extra columns we don't enumerate).
+//
+// This is warn-only on the Node side: a validation failure logs a
+// structured line but doesn't block the response. The Python side is the
+// source of truth (it raises under STRICT_SCHEMA=1 in tests). Node's
+// validator is defense-in-depth — catches drift in production where
+// Python isn't running with STRICT_SCHEMA.
+const ajv = new Ajv({ strict: false, allErrors: true });
+ajvFormats(ajv);
+const validateProcessResponse = ajv.compile(processResponseSchema);
 const redisClient = redis.createClient({
     url: 'redis://cache:6380'
 });
@@ -216,7 +233,25 @@ async function processPlays(gameId, res) {
         var response = await axios.post(`${RDATA_BASE_URL}/cfb/process`, {
             gameId: gameId
         })
-        return response.data;
+        const data = response.data;
+        // Defense-in-depth schema check on the Python -> Node boundary.
+        // Warn-only — never block a response on validation failure. Python
+        // is the canonical validator; this is just to surface drift in
+        // prod where the Python side runs with STRICT_SCHEMA off.
+        if (!validateProcessResponse(data)) {
+            try {
+                process.stdout.write(JSON.stringify({
+                    event: 'schema_validation_failure',
+                    source: 'node',
+                    gameId,
+                    error_count: validateProcessResponse.errors?.length ?? 0,
+                    errors: (validateProcessResponse.errors ?? []).slice(0, 5),
+                }) + '\n');
+            } catch {
+                // Logging must never break the request.
+            }
+        }
+        return data;
     });
 }
 

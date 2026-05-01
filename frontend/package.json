@@ -24,6 +24,8 @@
   },
   "homepage": "https://github.com/saiemgilani/cfb-data-api#readme",
   "dependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "axios": "^0.21.1",
     "ejs": "^3.1.5",
     "express": "^4.17.1",

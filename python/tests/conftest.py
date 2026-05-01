@@ -1,8 +1,14 @@
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+# Force schema validation to *raise* during tests so any drift in the
+# /cfb/process response shape immediately fails the offending test.
+# Production keeps the default warn-only behavior.
+os.environ.setdefault("STRICT_SCHEMA", "1")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

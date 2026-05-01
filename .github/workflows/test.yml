@@ -13,27 +13,27 @@ concurrency:
 jobs:
   python:
     runs-on: ubuntu-latest
+    # Use the same official python:3.14-slim image that's verified locally.
+    # actions/setup-python's python build was producing a pytest-collection
+    # failure that didn't reproduce in this image.
+    container:
+      image: python:3.14-slim
     defaults:
       run:
         working-directory: python
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-          cache: pip
-          cache-dependency-path: python/requirements*.txt
-
       - name: Install OpenMP runtime (xgboost dep on Linux)
-        run: sudo apt-get update && sudo apt-get install -y libgomp1
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq libgomp1
 
       - name: Install Python deps
-        run: |
-          pip install -r requirements.txt -r requirements-dev.txt
+        run: pip install -q -r requirements.txt -r requirements-dev.txt
 
       - name: Run pytest (snapshot tests + others, integration deselected)
-        # Capture pytest output to the run summary so failures are
+        # Mirror the failure output to GITHUB_STEP_SUMMARY so failures are
         # debuggable from the public run page without log-access perms.
         run: |
           set -o pipefail
@@ -45,3 +45,17 @@ jobs:
           rc=$?
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           exit $rc
+
+      - name: Verify committed JSON Schema is up to date
+        # Regenerates the schema and fails if the committed copies have
+        # drifted. Catches the "edited schemas.py but forgot to dump"
+        # mistake at PR time instead of in production.
+        run: |
+          python scripts/dump_schema.py
+          if ! git diff --exit-code \
+              ../shared/process-response.schema.json \
+              ../frontend/cfb/process-response.schema.json; then
+              echo "::error::Committed JSON Schema files do not match schemas.py output."
+              echo "Run \`python scripts/dump_schema.py\` from python/ and commit the result."
+              exit 1
+          fi

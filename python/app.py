@@ -8,6 +8,9 @@ import logging
 import json
 import time
 
+from pydantic import ValidationError
+from schemas import ProcessResponse
+
 app = Flask(__name__)
 app.config["LOG_TYPE"] = os.environ.get("LOG_TYPE", "stream")
 app.config["LOG_LEVEL"] = os.environ.get("LOG_LEVEL", "INFO")
@@ -28,6 +31,43 @@ def after_request(response):
         response.status,
     )
     return response
+
+
+def _validate_response_shape(result, gameId):
+    """Validate `result` against ProcessResponse.
+
+    Behavior is controlled by the STRICT_SCHEMA env var:
+      - STRICT_SCHEMA=1 → re-raise ValidationError (used in tests so any
+        drift fails fast).
+      - default → log a structured warning with the first 10 errors and
+        return; we still serve the response. The downstream Node side
+        also validates via ajv as a defense-in-depth check.
+
+    Returns nothing; effects are logging + (optionally) raising.
+    """
+    try:
+        ProcessResponse.model_validate(result)
+    except ValidationError as exc:
+        if os.environ.get("STRICT_SCHEMA") == "1":
+            raise
+        # Best-effort logging — never let the validator path break a
+        # 200 response. Limit to the first 10 errors to keep log lines
+        # bounded for genuinely-mangled payloads.
+        try:
+            errors = exc.errors(include_url=False)[:10]
+            logging.getLogger("app.metrics").warning(
+                json.dumps(
+                    {
+                        "event": "schema_validation_failure",
+                        "gameId": gameId,
+                        "error_count": exc.error_count(),
+                        "errors": errors,
+                    },
+                    default=str,
+                )
+            )
+        except Exception:
+            pass
 
 
 def _emit_metrics(timings, gameId, status, error=None):
@@ -291,6 +331,10 @@ def process():
             "gameInfo": np.array(pbp["gameInfo"]).tolist(),
             "season": np.array(pbp["season"]).tolist(),
         }
+        # Validate the response shape against the published contract.
+        # Default behavior is warn-only so we don't turn 200s into 500s
+        # on novel ESPN data; STRICT_SCHEMA=1 (tests, CI) raises.
+        _validate_response_shape(result, gameId)
         response = jsonify(result)
         # The bulk of this stage is the per-record reshape loop; the result
         # dict assembly and jsonify are sub-millisecond.
