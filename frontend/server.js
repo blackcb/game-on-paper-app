@@ -60,7 +60,7 @@ app.use((req, res, next) => {
             status: 429,
             message: "Too many requests."
         });
-    } else if (!["GET", "POST"].includes(req.method)) {
+    } else if (!["GET", "POST", "HEAD"].includes(req.method)) {
         return res.status(405).json({
             status: 405,
             message: "Method not allowed."
