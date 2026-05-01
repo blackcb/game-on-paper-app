@@ -110,6 +110,103 @@ improvements per phase:
 Targets: Desktop ≥95 / Mobile ≥90 across all three pages by end of
 Phase 2.
 
+### After Phase 1 — quick-win bug fixes (2026-05-01)
+
+All 16 quick-win commits (PRs A–D in the migration plan) deployed to
+the replica. Re-measurements taken from the same vantage as the
+baseline (Cloudflare proxy, local laptop in eastern US).
+
+**TTFB** (median of 5):
+
+| Path | Pre-CDN | After Phase 0 | After Phase 1 | Δ vs baseline |
+|---|---:|---:|---:|---:|
+| `/cfb/` | 101 ms | 101 ms (DYNAMIC) | 153 ms | **+52 ms** |
+| `/cfb/year/2024/teams/differential` | 113 ms | 49–69 ms | 47 ms | −58% |
+| `/cfb/game/401403910` warm | 560 ms | 560 ms | 490 ms | −12% |
+
+`/cfb/` regressed ~50 ms, almost certainly the gzip CPU cost on a
+315 KB HTML body. Page is `cf-cache-status: DYNAMIC` so CF doesn't
+edge-cache it; the savings on the wire (303 KB shaved) come at the
+price of compression CPU. On a fast desktop connection this is a
+wash; on Slow 4G (1.6 Mbps), 303 KB extra would have cost ~1.5 s
+of transfer time, so net mobile wins are large. Worth a follow-up
+mobile field test before tightening Lighthouse Mobile thresholds.
+
+**Server-Timing on the warm game-page path** (the headline win):
+
+```
+Before:  espn_pbp 234ms · cache_lookup 5ms · summary 8ms · total 292ms
+After:                    cache_lookup 3ms · summary 2ms · total  45ms
+```
+
+The `espn_pbp` entry vanished entirely on completed games — the
+cache-first commit ([routes.js:412](../frontend/cfb/routes.js)) skips
+ESPN whenever Redis already has the processed PBP and
+`gameInfo.status.type.completed === true`. Server-side processing
+time on warm hits dropped 84%.
+
+**Cold game-page Server-Timing** is unchanged at ~6,000 ms, dominated
+by the 5.4 s Python pipeline. None of the Phase 1 fixes touch that
+path; it's Phase 2's problem.
+
+**Page weight via curl** (single-vantage GET):
+
+| Path | Wire (baseline) | Wire (today) | Uncompressed |
+|---|---:|---:|---:|
+| `/cfb/` | 11.7 KB | 11.8 KB | 315.6 KB |
+| `/cfb/year/.../differential` | 10.6 KB | 10.6 KB | 169.1 KB |
+| `/cfb/game/401403910` | 161.5 KB | 162.0 KB | 2,914.0 KB |
+
+Curl-visible weight is unchanged because Cloudflare was already
+brotli-compressing for the baseline measurement, so the new origin
+gzip middleware only saves bytes on the origin→CF hop, invisible
+to a CF-proxied client. (The asset cleanup deleted files not
+referenced by these pages, so it doesn't show up in single-page
+GETs either.)
+
+**Lighthouse CI Desktop** (replica, median of 3, 2026-05-01 same day):
+
+| URL | Pre-Phase-1 perf | Post-Phase-1 perf | TBW (pre) | TBW (post) |
+|---|---:|---:|---:|---:|
+| `/cfb/` | 0.71 | 0.71 | 8.3 MB | 8.29 MB |
+| `/cfb/game/401403910` | 0.72 | 0.61 | 671 KB | 676 KB |
+| `/cfb/year/.../differential` | 0.74 | 0.76 | 5.8 MB | 5.64 MB |
+
+Desktop lhci is essentially flat — expected. The Phase 1 wins are
+not desktop-Lighthouse-shaped:
+- Asset cleanup deleted **unreferenced** Bootstrap variants and
+  source maps; lhci's headless Chromium doesn't fetch them anyway.
+- Origin gzip helps the origin→CF hop, not the CF→client hop that
+  lhci measures.
+- Cache-first cuts server-side `total` by 247 ms, but lhci's
+  desktop preset (10 Mbps, 1× CPU) makes that imperceptible —
+  the bottleneck is render time, not TTFB.
+- gunicorn (vs single-threaded Flask dev server) is a concurrency
+  win, not a single-request-latency win. Would show under load
+  testing (`wrk`/`ab`), invisible to lhci's serial-fetch model.
+
+The game-page perf 0.72 → 0.61 drop is single-run SI noise; SI on
+that page ranged 1,334–4,343 ms across 3 baseline runs and the
+issue carries over here. Don't tighten the SI threshold yet.
+
+**Bottom line.** Phase 1 ships:
+- one large measurable win (warm-game server-side latency
+  292 → 45 ms, observed via Server-Timing);
+- one large bandwidth-on-mobile win (HTML gzip, invisible on
+  desktop benchmarks but worth ~1.5 s of transfer time on Slow 4G);
+- a stack of correctness/security fixes (HEAD allow, UA-null
+  guard, getServiceHealth resilience, cache OOM policy, axios
+  CVEs, KeyError-blanket-catch tightening) that don't show up in
+  perf numbers but were covered up real bugs.
+
+**Threshold update from this baseline** (per Day 5's
+re-baseline-after-each-phase rule):
+- Don't tighten yet. Single-vantage desktop lhci didn't move; need a
+  Mobile/throttled run to capture the gzip + compression wins
+  before adjusting the warn thresholds. Plan: run lhci with the
+  `mobile` preset against the replica and record below as a
+  follow-up.
+
 ### Skipped / deferred
 
 - **LCP p75 from CF Web Analytics** on the replica — skipped. The replica
