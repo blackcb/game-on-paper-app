@@ -108,8 +108,10 @@ async function retrieveRemotePercentiles(year = null, pctile = null) {
         // update redis cache
         const content = response.data.results;
         const key = generateKey([year, "percentiles", pctile]);
-        await redisClient.set(key, JSON.stringify(content))
-        await redisClient.expire(key, 60 * 60 * 24 * 3); // expire every three days so that we get fresh data
+        // SETEX-equivalent: atomic write+TTL in one round trip vs the
+        // previous SET-then-EXPIRE pair (two RTTs, with a window in
+        // between where the key existed without a TTL).
+        await redisClient.set(key, JSON.stringify(content), { EX: 60 * 60 * 24 * 3 })
         return content;
     } catch (err) {
         console.log(`could not find percentiles (${pctile}) for league in ${year}, checking ${year - 1}`)
@@ -182,8 +184,10 @@ async function retrieveRemoteLeagueData(year, type) {
             type: type
         });
         const key = `${year}-${type}`;
-        await redisClient.set(key, JSON.stringify(content))
-        await redisClient.expire(key, 60 * 60 * 24 * 3); // expire every three days so that we get fresh data
+        // SETEX-equivalent: atomic write+TTL in one round trip vs the
+        // previous SET-then-EXPIRE pair (two RTTs, with a window in
+        // between where the key existed without a TTL).
+        await redisClient.set(key, JSON.stringify(content), { EX: 60 * 60 * 24 * 3 })
         return content;
     } catch (err) {
         console.log(`could not find data for league in ${year}, checking ${year - 1}`)
@@ -231,8 +235,10 @@ async function retrieveRemoteTeamData(year, team_id, type) {
             type: type
         });
         const key = generateKey([year, team_id, type]);
-        await redisClient.set(key, JSON.stringify(content))
-        await redisClient.expire(key, 60 * 60 * 24 * 3); // expire every three days so that we get fresh data
+        // SETEX-equivalent: atomic write+TTL in one round trip vs the
+        // previous SET-then-EXPIRE pair (two RTTs, with a window in
+        // between where the key existed without a TTL).
+        await redisClient.set(key, JSON.stringify(content), { EX: 60 * 60 * 24 * 3 })
         return content;
     } catch (err) {
         console.log(`could not find data for ${team_id} in ${year}, checking ${year - 1}`)
@@ -293,8 +299,7 @@ async function retrieveRemoteLastUpdated() {
         url: `http://summary:3000/updated`
     });
     const content = response.data;
-    await redisClient.set(`summary-last-updated`, JSON.stringify(content))
-    await redisClient.expire(`summary-last-updated`, 60 * 60 * 24 * 3); // expire every three days so that we get fresh data
+    await redisClient.set(`summary-last-updated`, JSON.stringify(content), { EX: 60 * 60 * 24 * 3 })
     return content.last_updated;
 }
 

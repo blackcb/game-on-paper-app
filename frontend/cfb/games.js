@@ -157,10 +157,12 @@ async function _remoteRetrievePBP(gameId, res) {
     }
 
     try {
-        await time(res, 'cache_write', async () => {
-            await redisClient.set(`cfb-${gameId}`, JSON.stringify(pbp));
-            await redisClient.expire(`cfb-${gameId}`, 60 * 1); // 1 min TTL
-        });
+        await time(res, 'cache_write', () =>
+            // Atomic write+TTL in one round trip — previously SET then
+            // EXPIRE in a separate call, which left a brief window
+            // where the key had no TTL and could outlive the 60s budget.
+            redisClient.set(`cfb-${gameId}`, JSON.stringify(pbp), { EX: 60 * 1 })
+        );
     } catch (e) {
         console.log(`failed to write game data for key cfb-${gameId} to redis game cache, error: ${e}`);
     }
@@ -297,8 +299,8 @@ exports.getGameList = getSchedule
 exports.getPBP = retrievePBP
 exports.getServiceHealth = getServiceHealth
 exports.setGameCacheValue = async (key, value, expiry) => {
-    await redisClient.set(key, value);
-    await redisClient.expire(key, expiry);
+    // Atomic SET with TTL — replaces the prior SET + EXPIRE pair.
+    await redisClient.set(key, value, { EX: expiry });
 }
 
 exports.getGameCacheValue = async (key) => {
