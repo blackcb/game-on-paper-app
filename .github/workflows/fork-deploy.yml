@@ -16,6 +16,55 @@ permissions:
   packages: write
 
 jobs:
+  python-test:
+    # Pytest + schema-freshness check. Runs in parallel with the image
+    # builds so it doesn't add to the critical path. Deploy waits on
+    # both this and `build` so a Python regression blocks the rollout.
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.14-slim
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenMP runtime (xgboost dep on Linux)
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq libgomp1
+
+      - name: Install Python deps
+        run: pip install -q -r requirements.txt -r requirements-dev.txt
+
+      - name: Run pytest
+        # Mirror failures to GITHUB_STEP_SUMMARY so debugging is possible
+        # from the public run page without log-access perms.
+        run: |
+          set -o pipefail
+          {
+            echo '## pytest output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          pytest -m "not integration" -v 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Verify committed JSON Schema is up to date
+        # Regenerates the schema and fails if the committed copies have
+        # drifted. Catches the "edited schemas.py but forgot to dump"
+        # mistake at PR/push time instead of in production.
+        run: |
+          python scripts/dump_schema.py
+          if ! git diff --exit-code \
+              ../shared/process-response.schema.json \
+              ../frontend/cfb/process-response.schema.json; then
+              echo "::error::Committed JSON Schema files do not match schemas.py output."
+              echo "Run \`python scripts/dump_schema.py\` from python/ and commit the result."
+              exit 1
+          fi
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -56,7 +105,9 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
   deploy:
-    needs: build
+    # Wait on both the image builds and the python-test job. A pytest
+    # failure or schema drift will block the rollout.
+    needs: [build, python-test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
