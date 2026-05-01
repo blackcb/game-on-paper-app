@@ -405,6 +405,34 @@ instrumentation helpers (`time(...)`, `_emit_metrics`,
 upstream/main, so the upstream PRs ship plain function calls. Lockfile
 also stripped (upstream doesn't track `package-lock.json`).
 
+**Considered, not pursued — sportsdataverse upgrade (2026-05-01)**:
+
+Investigated whether upgrading past our pinned `sportsdataverse==0.0.36.3.3`
+would cut the 3.5 s pipeline. Findings:
+
+- The two PyPI lines are parallel branches, not a sequence.
+  `0.0.36.3.3` (our pin, released 2026-01-25, **pandas**) is the
+  actively maintained line. `0.0.40` (released 2025-12-06,
+  **polars-based rewrite**, 4,732 lines vs our 6,277) is older
+  calendar-time and was apparently paused.
+- Polars would plausibly drop the pipeline from 3.5 s → 700–1000 ms
+  (5–10× typical for column-heavy work), but adopting `0.0.40`
+  would:
+  1. Lose ~5 months of 0.0.36.x bugfixes (turnover detection, half
+     edge cases, kickoff/punt fixes, GW play in NCG 2025).
+  2. Break the `create_box_score()` call site at [app.py:153](../python/app.py#L153)
+     — signature changed to take `play_df` as a parameter.
+  3. Risk numeric drift in EP/WP/QBR — Day 2 snapshot tests would
+     surface it but reconciliation is non-trivial.
+  4. Pin us to polars `<=0.18.15` (current is 1.x), with its own
+     deprecation footguns.
+
+**Decision**: stay on `0.0.36.3.3`. The cleanest paths to recover that
+latency are (a) the in-our-code wins (`to_dict` swap, response trim,
+pre-warm cache for recent completions) for ~10–25% combined, or (b)
+the Phase 4 ONNX/TS port. Reopen this if/when upstream merges polars
+back into the `0.0.36.x` line.
+
 ---
 
 ## Phase 2 — Worker rewrite + KV + Pages (Tier 2)
