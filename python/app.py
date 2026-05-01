@@ -103,12 +103,44 @@ def process():
     timings = {}
     gameId = None
     try:
-        gameId = request.get_json(force=True)["gameId"]
+        body = request.get_json(force=True) or {}
+        gameId = body.get("gameId")
+        if not gameId:
+            timings["total"] = time.perf_counter() - request_start
+            _emit_metrics(timings, gameId, 404, error="missing_gameId")
+            response = jsonify({
+                "status": "bad",
+                "message": "ESPN payload is malformed. Data not available.",
+            })
+            response.headers["Server-Timing"] = _server_timing_header(timings)
+            return response, 404
 
         t0 = time.perf_counter()
         processed_data = CFBPlayProcess(gameId=gameId)
         pbp = processed_data.espn_cfb_pbp()
         timings["espn_fetch"] = time.perf_counter() - t0
+
+        # Validate ESPN's payload before trusting its shape downstream.
+        # `header` is the canary — present on every healthy ESPN
+        # response, missing when ESPN serves a stub or 404-equivalent
+        # for an unknown / not-yet-scheduled gameId. Returning 404
+        # here is the *only* legitimate "ESPN payload is malformed"
+        # case; any KeyError raised later in the pipeline is a real
+        # bug (a sportsdataverse column rename, a typo in our
+        # reshape, etc.) and should surface as a 500 with traceback,
+        # not be silently papered over as an ESPN issue.
+        if not pbp.get("header"):
+            timings["total"] = time.perf_counter() - request_start
+            logging.getLogger("root").info(
+                "ESPN returned no header for gameId=%s; returning 404", gameId
+            )
+            _emit_metrics(timings, gameId, 404, error="missing_header")
+            response = jsonify({
+                "status": "bad",
+                "message": "ESPN payload is malformed. Data not available.",
+            })
+            response.headers["Server-Timing"] = _server_timing_header(timings)
+            return response, 404
 
         t0 = time.perf_counter()
         processed_data.run_processing_pipeline()
@@ -349,20 +381,6 @@ def process():
         response.headers["Server-Timing"] = _server_timing_header(timings)
         _emit_metrics(timings, gameId, 200)
         return response, 200
-    except KeyError as e:
-        timings["total"] = time.perf_counter() - request_start
-        logging.getLogger("root").error(
-            "Error while processing PBP on Python side, threw 404: %r (%s)" % (e, e)
-        )
-        _emit_metrics(timings, gameId, 404, error=repr(e))
-        response = jsonify(
-            {
-                "status": "bad",
-                "message": "ESPN payload is malformed. Data not available.",
-            }
-        )
-        response.headers["Server-Timing"] = _server_timing_header(timings)
-        return response, 404
     except Exception as e:
         timings["total"] = time.perf_counter() - request_start
         logging.getLogger("root").error(
