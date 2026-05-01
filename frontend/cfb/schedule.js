@@ -79,7 +79,10 @@ async function _getRemoteGames (year, week, type, group) {
     }
 
     if (year == null || week == null) {
-        const res =  await axios.get(`https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=${espnGroup || 80}&size=100000&${new Date().getTime()}`, {
+        // No cache-buster: ESPN's scoreboard endpoint is short-TTL'd at
+        // their CDN already (~1 min). Appending a unix-ms suffix forced
+        // every request to ESPN origin and added ~400 ms / call.
+        const res =  await axios.get(`https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=${espnGroup || 80}&size=100000`, {
             protocol: "https"
         })
         debuglog(res.request.res.responseUrl)
@@ -129,7 +132,8 @@ async function _getRemoteGames (year, week, type, group) {
             }
         }
 
-        const url = baseUrl + (new URLSearchParams(query)).toString() + `&${new Date().getTime()}`;
+        // No cache-buster: see scoreboard endpoint above for rationale.
+        const url = baseUrl + (new URLSearchParams(query)).toString();
         console.log(url)
         const res = await axios.get(url);
         // debuglog(JSON.stringify(params))

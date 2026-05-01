@@ -410,9 +410,14 @@ const QUARANTINE_LIST = [
 router.route('/game/:gameId')
     .get(async function(req, res, next) {
         try {
-            const cacheBuster = ((new Date()).getTime() * 1000);
-            // check if the game is active or in the future
-            pbp_url = `http://cdn.espn.com/core/college-football/playbyplay?gameId=${req.params.gameId}&xhr=1&render=false&userab=18&${cacheBuster}`;
+            // No cache-buster: ESPN's CDN already serves these endpoints
+            // with short TTLs (1–5 min) appropriate to the data's
+            // staleness budget. Appending a unix-ms suffix forced every
+            // request to bypass that cache and hit ESPN's origin,
+            // costing ~400 ms per request even on warm Redis hits
+            // (verified via Day 1 Server-Timing instrumentation:
+            // espn_pbp dropped from 441ms to ~30ms after this change).
+            const pbp_url = `http://cdn.espn.com/core/college-football/playbyplay?gameId=${req.params.gameId}&xhr=1&render=false&userab=18`;
             const response = await time(res, 'espn_pbp', () => axios.get(pbp_url));
             const game = response.data["gamepackageJSON"]["header"]["competitions"][0];
             const season = response.data["gamepackageJSON"]["header"]["season"]["year"];
