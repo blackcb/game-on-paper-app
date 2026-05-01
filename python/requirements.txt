@@ -1,5 +1,9 @@
 Flask==3.1.2
 Werkzeug==3.1.5
+# Brotli/gzip compression for response bodies. /cfb/process serves
+# multi-MB JSON (game pages can be 3 MB raw); flask-compress drops
+# that 5-10x on the wire.
+Flask-Compress>=1.14,<2
 # Production WSGI server. The previous CMD `python app.py` ran Flask's
 # built-in dev server, which is single-threaded and explicitly NOT for
 # production — concurrent requests serialized end-to-end. Two gthread

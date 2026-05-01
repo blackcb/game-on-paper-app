@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_compress import Compress
 import numpy as np
 from datetime import datetime as dt, timezone as tz
 from flask_logs import LogSetup
@@ -14,6 +15,11 @@ from schemas import ProcessResponse
 app = Flask(__name__)
 app.config["LOG_TYPE"] = os.environ.get("LOG_TYPE", "stream")
 app.config["LOG_LEVEL"] = os.environ.get("LOG_LEVEL", "INFO")
+# Compress response bodies (Brotli, then gzip fallback). /cfb/process
+# returns multi-MB JSON (3 MB raw on a typical game page) that
+# compresses 5-10x. Cuts the python -> node hop's wire bytes
+# proportionally and shaves real time off node's response render.
+Compress(app)
 
 logs = LogSetup()
 logs.init_app(app)
