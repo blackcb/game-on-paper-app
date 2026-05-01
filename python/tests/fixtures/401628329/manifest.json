@@ -1,0 +1,6 @@
+{
+  "https://cdn.espn.com/core/college-football/playbyplay?gameId=401628329&xhr=1": "cdn.espn.com_core_college-football_playbyplay__0d64ad2d.json",
+  "https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event=401628329": "site.api.espn.com_apis_site_v2_sports_football_college-football_summary__64817468.json",
+  "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football/events/401628329/competitions/401628329/odds?limit=100": "sports.core.api.espn.com_v2_sports_football_leagues_college-football_events_401628329_competitions_401628329_odds__892bbcc3.json",
+  "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football/events/401628329/competitions/401628329/plays?limit=1000": "sports.core.api.espn.com_v2_sports_football_leagues_college-football_events_401628329_competitions_401628329_plays__1c34716b.json"
+}

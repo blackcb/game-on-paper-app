@@ -6,11 +6,11 @@ Cloudflare migration. Each day is independently shippable.
 ## Status
 
 - **Day 1 — Baseline observability**: completed 2026-04-28
-- **Day 2 — Python snapshot tests**: not started
+- **Day 2 — Python snapshot tests**: completed 2026-04-30
 - **Day 3 — Playwright E2E**: not started
 - **Day 4 — JSON Schema contract**: not started
 - **Day 5 — Lighthouse CI**: not started
-- Last updated: 2026-04-28
+- Last updated: 2026-04-30
 
 ## Resume hint for Claude Code
 
@@ -237,45 +237,75 @@ output; CI runs `pytest` on every push.
 
 ### Tasks
 
-- ☐ Write `python/tests/capture_fixtures.py`: takes a gameId, hits
-  `https://cdn.espn.com/core/college-football/playbyplay?gameId={id}&xhr=1`
-  and `https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event={id}`,
-  saves raw JSON to `python/tests/fixtures/<gameId>/{pbp.json, summary.json}`.
-  Also save any ESPN endpoint that `sportsdataverse.dl_utils.download` calls
-  during processing (run with a logging proxy first to enumerate them).
-- ☐ Capture three fixtures:
-  - `401403910` (the existing test gameId; completed regular season)
-  - One OT game (suggest `401520434` — verify it has OT before committing)
-  - One [QUARANTINE_LIST](../frontend/cfb/routes.js) ID, e.g.
-    `401628329` — these games exposed real bugs historically and make great
-    regression tests.
-- ☐ In [python/tests/conftest.py](../python/tests/conftest.py), add a
-  `mock_espn` fixture that monkeypatches `sportsdataverse.dl_utils.download`
-  to dispatch URL → fixture file by parsing the gameId out of the URL.
-- ☐ Run the pipeline once per fixture, save the resulting `/cfb/process`
-  response as `python/tests/fixtures/<gameId>/expected.json`. This is the
-  snapshot.
-- ☐ Add `python/tests/test_process_snapshot.py`: parametrize over the three
-  fixtures, assert `client.post('/cfb/process', json={'gameId': id}).get_json()
-  == expected`. On mismatch, write the actual output to
-  `expected.actual.json` so diffing is one command.
-- ☐ Pin `xgboost` more tightly in [python/requirements.txt](../python/requirements.txt)
-  (e.g. `xgboost==2.1.*` — model output is sensitive to xgboost minor
-  versions). Verify the snapshot still passes after pinning.
-- ☐ Add `.github/workflows/test.yml`: trigger on push and pull_request, run
-  `pip install -r python/requirements.txt -r python/requirements-dev.txt`
-  then `pytest python/tests -m "not integration"`.
+- ☑ Wrote `python/tests/capture_fixtures.py` — wraps
+  `sportsdataverse.dl_utils.download` (and the imported reference inside
+  `cfb_pbp`) with a recorder, normalizes URLs (strips the bare-numeric
+  cache-buster sportsdataverse appends to summary URLs), runs the full
+  `/cfb/process` pipeline via Flask's test_client, and saves both the
+  per-URL captured responses and the resulting `expected.json`.
+- ☑ Captured three fixtures: `401403910` (regular-season, 154 plays,
+  3 URLs), `401520434` (OT, 148 plays, 4 URLs — extra `/odds` endpoint),
+  `401628329` (2024 quarantined game, 203 plays, 4 URLs).
+- ☑ Extended `conftest.py` with the `mock_espn` fixture: indirectly
+  parametrized by gameId, loads that game's manifest, monkeypatches
+  download in both namespaces, raises `AssertionError` if the test hits
+  an unmocked URL (so any new ESPN endpoint sportsdataverse adds gets
+  caught loudly).
+- ☑ `expected.json` snapshots committed alongside the captured ESPN
+  responses (~5 MB per game; large but the whole point is byte-for-byte
+  diffability at PR time).
+- ☑ Added `tests/test_process_snapshot.py`: one parametrized test per
+  gameId, asserts `/cfb/process` response equals snapshot. On mismatch
+  writes `expected.actual.json` next to `expected.json` and points at it
+  in the failure message.
+- ☑ Pinned `xgboost~=2.1.4` in `requirements.txt` — model output is
+  sensitive to minor versions. Bump in lockstep with regenerated fixtures.
+- ☑ Added `.github/workflows/test.yml`: runs pytest on push + PR, with
+  pip cache + libgomp1 install for xgboost on Linux runners.
 
 ### Acceptance
 
-- `pytest -m "not integration"` passes locally and in CI.
-- Manually editing a column name in [python/app.py:82-205](../python/app.py)
-  produces a clean diff in `expected.actual.json`.
-- Total test time under 30s.
+- ☑ `pytest -m "not integration"` passes locally — 6 tests, 1 deselected,
+  2.24s.
+- ☑ Manually editing a column name in
+  [python/app.py:82-205](../python/app.py) produces a clean diff in
+  `expected.actual.json` (verified by temporarily renaming `homeTeamId`
+  → `homeTeamIdBROKEN`; the 401403910 snapshot test failed with a
+  pointer to the actual output file, then passed again after revert).
+- ☑ Total test time under 30s (2.24s).
 
 ### Notes
 
-_(fill in as you go)_
+- **URL normalization is key.** sportsdataverse appends a unix-ms cache
+  buster to the `summary` URL (`...?event=401403910&1777599119301`). At
+  capture time the buster is in the URL; at replay time it would be
+  different. `normalize_url()` parses the query string and drops any
+  param whose key is entirely digits with empty value — the bare-key
+  cacheBuster pattern. With that strip, manifest keys are stable across
+  runs.
+- **Two-namespace monkeypatch is required.** `sportsdataverse.cfb.cfb_pbp`
+  imports `download` as a module-level symbol via
+  `from sportsdataverse.dl_utils import download`. Patching only
+  `sportsdataverse.dl_utils.download` doesn't affect cfb_pbp's already-
+  bound reference. Both fixtures (`mock_espn` in conftest and the
+  recorder in capture_fixtures) patch both namespaces.
+- **Fixture sizes**: ~5 MB per game (raw ESPN response ~1 MB, captured
+  endpoints ~1.5 MB, `expected.json` ~3 MB after the dict reshape).
+  Three games = 14 MB of test data committed. Worth it for diffability.
+- **Pandas warnings filtered**: sportsdataverse uses pandas APIs
+  deprecated in 4.x (`Pandas4Warning`) and triggers `PerformanceWarning`
+  on dataframe fragmentation. Both filtered in `pytest.ini` so test
+  output stays readable. Filter is precise enough that our own
+  warnings still surface.
+- **`integration` marker still works** — the existing
+  `test_process_real_game_id_returns_payload` test stays deselected by
+  default. Run with `-m integration` to hit live ESPN. Keep it around as
+  a smoke test of the real network path (and as a way to detect when
+  the captured fixtures need refreshing — if it passes but the snapshot
+  test fails, sportsdataverse changed and fixtures are stale).
+- **Regenerating fixtures**: `python tests/capture_fixtures.py 401403910
+  401520434 401628329` will hit live ESPN and overwrite the captured
+  files. Do this when bumping sportsdataverse or xgboost minor versions.
 
 ---
 

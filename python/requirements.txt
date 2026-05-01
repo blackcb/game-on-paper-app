@@ -1,5 +1,8 @@
 Flask==3.1.2
 Werkzeug==3.1.5
-xgboost<3
+# Pinned tightly because EP/WP/QBR model output is sensitive to xgboost
+# minor versions; snapshot tests in python/tests/test_process_snapshot.py
+# would diff if this drifts. Bump in lockstep with regenerated fixtures.
+xgboost~=2.1.4
 numpy>=2.0.2
 sportsdataverse==0.0.36.3.3
