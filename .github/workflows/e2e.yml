@@ -47,8 +47,9 @@ jobs:
           BASE_URL: https://sports.unseen-university.org
         run: npx playwright test
 
-      - name: Upload Playwright report on failure
-        if: failure()
+      - name: Upload Playwright report
+        # Upload on both pass and fail (skip cancelled runs).
+        if: success() || failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
