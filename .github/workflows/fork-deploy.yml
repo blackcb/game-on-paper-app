@@ -52,18 +52,37 @@ jobs:
           exit $rc
 
       - name: Verify committed JSON Schema is up to date
-        # Regenerates the schema and fails if the committed copies have
-        # drifted. Catches the "edited schemas.py but forgot to dump"
-        # mistake at PR/push time instead of in production.
+        # Regenerates the schema in-process and fails if either committed
+        # copy drifted. Catches the "edited schemas.py but forgot to dump"
+        # mistake at push time instead of in production.
+        # Pure-Python compare (no `git diff`) because python:3.14-slim
+        # doesn't ship git and we don't want to bloat the container image
+        # for a 3-line diff check.
         run: |
-          python scripts/dump_schema.py
-          if ! git diff --exit-code \
-              ../shared/process-response.schema.json \
-              ../frontend/cfb/process-response.schema.json; then
-              echo "::error::Committed JSON Schema files do not match schemas.py output."
-              echo "Run \`python scripts/dump_schema.py\` from python/ and commit the result."
-              exit 1
-          fi
+          python -c "
+          import sys
+          from pathlib import Path
+          from schemas import _dump_schema
+
+          expected = _dump_schema()
+          targets = [
+              '../shared/process-response.schema.json',
+              '../frontend/cfb/process-response.schema.json',
+          ]
+          drifted = []
+          for path in targets:
+              committed = Path(path).read_text(encoding='utf-8')
+              if committed != expected:
+                  drifted.append(path)
+
+          if drifted:
+              for p in drifted:
+                  print(f'::error file={p}::JSON Schema drifted from schemas.py output')
+              print()
+              print('Run \`python scripts/dump_schema.py\` from python/ and commit the result.')
+              sys.exit(1)
+          print(f'schema files up to date ({len(expected)} bytes each)')
+          "
 
   build:
     runs-on: ubuntu-latest
