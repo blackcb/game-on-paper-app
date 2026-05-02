@@ -19,10 +19,17 @@ USER ACTION step without confirmation from the user.**
 - **Phase 2 — Worker rewrite + KV + Pages (Tier 2)**:
   - 2A scaffolding: **completed 2026-05-02** (Hono + TS + Wrangler);
     `worker/` directory live, `wrangler dev` smoke-tested locally.
-  - 2C KV namespaces: **created 2026-05-02** (`LEAGUE_DATA`,
-    `SUMMARY_LAST_UPDATED`); `wrangler deploy --dry-run` validates.
-  - 2B (route porting) / 2D (Cache API) / 2E (assets) / 2F (cron)
-    / 2G (tests) / 2H (cutover): not started
+  - 2C KV namespaces + summary data layer: **completed 2026-05-02**
+    (`LEAGUE_DATA`, `SUMMARY_LAST_UPDATED` provisioned; KV-first
+    `retrieveLeagueData` / `retrieveLastUpdated` ported with retry-cap
+    + MIN_SEASON floor).
+  - First smoke deploy: **2026-05-02** at
+    https://sports.unseen-university.workers.dev (worker name `sports`,
+    account subdomain `unseen-university`). All four ported routes
+    return correctly; non-ported paths and `/assets/*` 404 as expected.
+  - 2B (route porting in progress: glossary + 7 redirects done)
+  - 2D (Cache API) / 2E (assets) / 2F (cron) / 2H (cutover): not started
+  - 2G (tests): scaffolded; 20 vitest assertions green.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
 - Last updated: 2026-05-02
@@ -473,8 +480,8 @@ balancer or a single DNS edit.
   > Save as a `CLOUDFLARE_API_TOKEN` GitHub secret and a local
   > `~/.wrangler/config` entry. Not blocking for 2B (can port routes and
   > run locally with `wrangler dev`); blocks `wrangler deploy`.
-- ☑ Configure `wrangler.toml` with `name = "gameonpaper-experiment"`,
-  `main = "src/index.ts"`, `compatibility_date = "2026-05-02"`. Added
+- ☑ Configure `wrangler.toml` with `name = "sports"`,
+  `main = "src/index.tsx"`, `compatibility_date = "2026-05-02"`. Added
   `nodejs_compat` flag (some npm packages assume Node built-ins).
 
 #### 2B — Port routes incrementally
@@ -646,11 +653,13 @@ Two options, pick one:
 - Trade-off accepted: ships a small-but-nonzero runtime (~13 KB
   gzipped); itty-router is ~1 KB. Not material at this size of app.
 
-**Worker name: `gameonpaper-experiment`**.
-- Aligns with the fork's GHCR image namespace (`game-on-paper-experiment`).
+**Worker name: `sports`** (account subdomain: `unseen-university`).
+- Resulting *.workers.dev URL: `sports.unseen-university.workers.dev`,
+  visually mirrors the production replica `sports.unseen-university.org`.
 - Avoids colliding with the eventual upstream Worker if the maintainer
-  later adopts this approach with `gameonpaper`.
-- The *.workers.dev preview URL becomes `gameonpaper-experiment.<acct>.workers.dev`.
+  adopts this approach for the `gameonpaper` zone.
+- The fork's GHCR image namespace stays `game-on-paper-experiment`
+  (Docker-side identifier); the Cloudflare-side `sports` is independent.
 
 **Toolchain**: `wrangler@4.87`, `typescript@6`, `@cloudflare/workers-types@4.20260502`,
 `vitest@4`, `@cloudflare/vitest-pool-workers@0.15`. `compatibility_date`
