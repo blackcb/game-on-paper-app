@@ -157,6 +157,66 @@ export async function retrievePercentiles(
   }
 }
 
+async function fetchRemoteTeamData(
+  kv: KVNamespace,
+  year: number | null,
+  teamId: string | number,
+  type: string | null,
+  retriesRemaining = REMOTE_YEAR_RETRY_BUDGET,
+): Promise<TeamLeagueRow[]> {
+  try {
+    const payload: Record<string, string> = { team: String(teamId) };
+    if (year != null) payload.year = String(year);
+    if (type != null) payload.type = type;
+    const content = await postSummaryForm(payload);
+    // generateKey-equivalent: skip null parts.
+    const keyParts = [year, teamId, type].filter((p) => p != null);
+    if (keyParts.length > 0) {
+      await kv.put(keyParts.join("-"), JSON.stringify(content), {
+        expirationTtl: TTL_SECONDS,
+      });
+    }
+    return content;
+  } catch (err) {
+    console.log(
+      `team data fetch failed for year=${year}, teamId=${teamId}, type=${type}, retries=${retriesRemaining}: ${(err as Error).message}`,
+    );
+    if (retriesRemaining <= 0 || year == null || year - 1 < MIN_SEASON) {
+      // Express returns `[{ pos_team: team_id }]` on hard failure,
+      // not [] — preserve that quirk so consumers that expect
+      // a non-empty list don't crash.
+      return [{ teamId, team: "", pos_team: teamId } as TeamLeagueRow];
+    }
+    return fetchRemoteTeamData(kv, year - 1, teamId, type, retriesRemaining - 1);
+  }
+}
+
+// KV-first team-data reader. Mirrors `retrieveTeamData` in
+// frontend/cfb/routes.js:256. Either year and/or teamId required;
+// `type` may be null (multi-season aggregate). Cache key shape:
+// `${year-or-empty}-${teamId-or-empty}-${type-or-empty}` with empty
+// segments stripped.
+export async function retrieveTeamData(
+  kv: KVNamespace,
+  year: number | null,
+  teamId: string | number,
+  type: string | null,
+): Promise<TeamLeagueRow[]> {
+  if (year == null && teamId == null) return [];
+  const keyParts = [year, teamId, type].filter((p) => p != null);
+  if (keyParts.length === 0) return [];
+  const key = keyParts.join("-");
+  const cached = await kv.get(key);
+  if (cached) {
+    try {
+      return JSON.parse(cached) as TeamLeagueRow[];
+    } catch {
+      // Bad JSON — refetch.
+    }
+  }
+  return fetchRemoteTeamData(kv, year, teamId, type);
+}
+
 async function fetchRemoteLastUpdated(kv: KVNamespace): Promise<string | null> {
   const response = await fetch(`${SUMMARY_BASE}/updated`);
   if (!response.ok) return null;
