@@ -7,7 +7,7 @@
 # Rename via `wrangler.toml` + a corresponding rename in the dashboard
 # if that lands.
 name = "gameonpaper-experiment"
-main = "src/index.ts"
+main = "src/index.tsx"
 # Chris Black's personal account (the one hosting unseen-university.org).
 account_id = "ebe521cb5b561683303b77d32e240ba4"
 # 2026-05-02: today's date. Bumping this opts into newer Workers

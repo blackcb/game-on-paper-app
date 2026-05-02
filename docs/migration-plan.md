@@ -497,8 +497,10 @@ The current Express app has these route groups in
 
 Port in this order (simplest first, biggest at the end):
 
-- ☐ `/cfb/glossary` — static-ish, just renders the glossary JSON. Validates
-  the templating approach works.
+- ☑ `/cfb/glossary` — static-ish, just renders the glossary JSON. Validates
+  the templating approach works. Hono JSX `Layout` + `GlossaryPage`
+  components reproduce the four EJS partials. 17 KB rendered, all 12
+  letters + alphabetized terms + HTML-in-definitions intact.
 - ☐ Static redirects (`/cfb/teams`, `/cfb/players`, etc.).
 - ☐ `/cfb/year/:year/teams/:type` (leaderboard) — exercises KV reads from
   the summary service.
