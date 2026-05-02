@@ -54,6 +54,32 @@ USER ACTION step without confirmation from the user.**
 - Last updated: 2026-05-02 (Phase 2B — game route shipped with stub
   Game template; full template port pending)
 
+### Next session entry point
+
+End-of-day stop on 2026-05-02. Branch
+`instrument-plus-cloudflare-cdn`, last commit
+`83a9acc` (Phase 2B: wire /cfb/game/:gameId). Working tree clean,
+21 commits ahead of origin (not pushed by request — push when the
+next phase lands or upstream is ready).
+
+Pick up at the **Phase 2 → 2B → game.ejs full port** Resume hint
+block lower in this file (search "Resume hint (next session)"
+under Phase 2 Notes). One-line summary: replace the deliberate
+stub at `worker/src/templates/Game.tsx` with the full port of
+`frontend/views/pages/cfb/game.ejs` (1501 lines) plus the four
+remaining partials (`slim_box_score`, `field`, `pass_chart`,
+`rush_chart`). The route, cache, Python proxy, game_error, and
+pregame are already live; only the Game.tsx body needs replacing.
+
+Sanity before starting:
+```
+cd worker
+npx tsc --noEmit          # should be clean
+npx vitest run            # 128 tests / 11 files / ~2.7s
+eval "$(grep '^export CLOUDFLARE_API_TOKEN' ~/.zshrc)"
+npx wrangler deploy       # smoke at sports.unseen-university.workers.dev
+```
+
 ## Resume hint for Claude Code
 
 1. Find the next phase whose status is not "completed" or "deferred".
