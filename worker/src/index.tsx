@@ -15,11 +15,14 @@ import {
   retrieveLastUpdated,
   retrieveLeagueData,
   retrievePercentiles,
+  retrieveTeamData,
 } from "./lib/summary";
+import { getTeamInformation } from "./lib/teams";
 import { EpaChartPage, type EpaChartTeam } from "./templates/EpaChart";
 import { GlossaryPage } from "./templates/Glossary";
 import { LeaderboardPage } from "./templates/Leaderboard";
 import { PlayerLeaderboardPage } from "./templates/PlayerLeaderboard";
+import { TeamPage, type TeamData } from "./templates/Team";
 import { TrendsPage } from "./templates/Trends";
 
 type Bindings = {
@@ -151,6 +154,78 @@ app.get("/cfb/year/:year/charts/team/epa", async (c) => {
   });
   const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
   return c.html(<EpaChartPage teams={teams} season={year} lastUpdated={lastUpdated} />);
+});
+
+// Multi-season team page. ESPN team metadata + summary-service
+// per-season breakdowns + (when type != differential) percentile
+// bands for the chosen metric. Mirrors routes.js:633-688 — the
+// `?json=1` shortcut returns just the ESPN team payload, and the
+// differential→adjEpaPerPlay metric rewrite preserves the EJS
+// template's "can't differential havoc/passing/rushing" rule.
+app.get("/cfb/team/:teamId", async (c) => {
+  const teamId = c.req.param("teamId");
+  const data = await getTeamInformation(teamId);
+  if (data == null) {
+    throw new Error(
+      `Data not available for team ${teamId}. An internal service may be down.`,
+    );
+  }
+
+  const jsonParam = c.req.query("json");
+  if (jsonParam === "true" || jsonParam === "1") {
+    return c.json(data);
+  }
+
+  const breakdowns = await retrieveTeamData(c.env.LEAGUE_DATA, null, teamId, null);
+  const type = c.req.query("type") ?? "differential";
+  let metric = c.req.query("metric") ?? "overall.adjEpaPerPlay";
+  if (
+    type === "differential" &&
+    (!metric.includes("overall") || metric.includes("havocRate"))
+  ) {
+    metric = "overall.adjEpaPerPlay";
+  }
+
+  let selectedPercentiles: Array<{
+    season: number | string;
+    pctile: number | string;
+    value: number;
+  }> = [];
+  if (type !== "differential") {
+    const PCTILES = [0.01, 0.25, 0.5, 0.75, 0.99];
+    const allPctls = (
+      await Promise.all(
+        PCTILES.map((p) => retrievePercentiles(c.env.LEAGUE_DATA, null, p)),
+      )
+    ).flat();
+    const pctlKey = getPercentileKey(metric);
+    selectedPercentiles = allPctls
+      .map((p) => ({
+        season: p.season,
+        pctile: p.pctile,
+        value: p[pctlKey] as number,
+      }))
+      .filter((p) => p.value !== undefined && p.value !== null);
+  }
+
+  const seasons = breakdowns
+    .map((b) => Number(b.season))
+    .filter((n) => !Number.isNaN(n))
+    .sort((a, b) => a - b);
+
+  const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
+
+  return c.html(
+    <TeamPage
+      teamData={data as TeamData}
+      breakdowns={breakdowns as unknown as Array<Record<string, unknown> & { season: number | string }>}
+      seasons={seasons}
+      percentiles={selectedPercentiles}
+      type={type}
+      metric={metric}
+      lastUpdated={lastUpdated}
+    />,
+  );
 });
 
 // Player leaderboard. Same KV-first → summary-fallback shape as the

@@ -35,13 +35,15 @@ USER ACTION step without confirmation from the user.**
     * `/cfb/year/:year/players/:type` (player leaderboard)
     * `/cfb/charts/trends`
     * `/cfb/year/:year/charts/team/epa`
+    * `/cfb/team/:teamId` (multi-season team page)
     * + `/`, `/cfb/`, `/cfb/healthcheck` placeholders
-  - 2B routes pending: team views, scoreboard, week scoreboards, game.
+  - 2B routes pending: `/cfb/year/:year/team/:teamId`, scoreboard,
+    week scoreboards, game.
   - 2D (Cache API) / 2E (assets) / 2F (cron) / 2H (cutover): not started
-  - 2G (tests): 67 vitest assertions, ~1.6 s.
+  - 2G (tests): 76 vitest assertions, ~2.0 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-02 (Phase 2B mid-stream)
+- Last updated: 2026-05-02 (Phase 2B mid-stream — `/cfb/team/:teamId` shipped)
 
 ## Resume hint for Claude Code
 
@@ -544,7 +546,22 @@ Port in this order (simplest first, biggest at the end):
   mapping (21 cases) to leaderboard.ts. Both templates inline the
   data as JSON for client-side Chart.js to render. The trends `?json=1`
   passthrough preserved verbatim. Both routes deployed and return 200.
-- ☐ `/cfb/team/:teamId`, `/cfb/year/:year/team/:teamId`.
+- ☑ `/cfb/team/:teamId`. **Done 2026-05-02.** Multi-season team page.
+  ESPN team metadata via `getTeamInformation` (KV-less; ESPN responses
+  rotate quickly enough that caching this isn't worth it yet — revisit
+  in 2D Cache API). Per-season breakdowns via `retrieveTeamData(null,
+  teamId, null)`. The `?json=1` shortcut returns the raw ESPN payload.
+  Differential→adjEpaPerPlay metric rewrite preserved verbatim
+  (havoc/passing/rushing aren't differential-able). Off/def types fan
+  out 5 percentile-band fetches in parallel and project them to the
+  `getPercentileKey(metric)` flat key. Helpers `cleanLocation`
+  (lowercase Georgia/61) and `hexToRgb` live inline in `Team.tsx` since
+  they're page-specific. Live deploy renders chrome + chart canvases
+  + inline data; breakdowns currently come back as the
+  `[{teamId, pos_team}]` sentinel because the internal
+  `http://summary:3000` URL isn't reachable from CF edge — same
+  posture as the leaderboards, real data fills in at 2H.
+- ☐ `/cfb/year/:year/team/:teamId`.
 - ☐ `/cfb/` (scoreboard) — exercises ESPN scoreboard fetch + Cache API.
 - ☐ `/cfb/year/:year/type/:type/week/:week`, `/cfb/year/:year`.
 - ☐ `/cfb/game/:gameId` — the big one. Exercises ESPN PBP fetch, Python
@@ -673,20 +690,20 @@ Two options, pick one:
 
 #### Resume hint (next session)
 
-Pick up at sub-phase 2B with the team views — the data layer is
-already in place (`lib/teams.ts`, `retrieveTeamData`). Two paths:
+`/cfb/team/:teamId` is done. Next up is `/cfb/year/:year/team/:teamId`
+— the per-season team page (`team_season.ejs` ~417 lines + 5 partials
+totaling ~700 more lines: matchup, team_card, team_player_cards,
+team_slice, pass_chart, rush_chart). Use `getTeamSeasonInformation`
+(already in `lib/teams.ts`) for the season-scoped ESPN payload and
+`retrieveTeamData(env.LEAGUE_DATA, year, teamId, null)` for the
+per-season breakdown.
 
-- **Team views** (next on the plan order): port `/cfb/team/:teamId`
-  (`team.ejs` ~282 lines, only needs `logos` partial — start here)
-  then `/cfb/year/:year/team/:teamId` (`team_season.ejs` ~417 lines
-  + 5 partials totaling ~700 more lines, sized as a separate commit).
-- **Skip ahead to the scoreboard**: `/cfb/` is the next ESPN-fetching
-  route (uses ESPN's scoreboard endpoint), simpler shape than team
-  views. Acceptable detour if context budget for the team_season
-  port is unavailable.
+Acceptable detour: skip ahead to the scoreboard `/cfb/` (uses ESPN's
+scoreboard endpoint) if context budget for the team_season port is
+unavailable. team_season is the largest pure-EJS port left.
 
 Verification before starting: `cd worker && npx vitest run` should
-pass 67 tests in ~1.6s, `npx tsc --noEmit` clean. The token is in
+pass 76 tests in ~2.0s, `npx tsc --noEmit` clean. The token is in
 `~/.zshrc`; pull it with `eval "$(grep '^export CLOUDFLARE_API_TOKEN' ~/.zshrc)"`
 in any subprocess that needs Cloudflare access.
 
@@ -709,6 +726,7 @@ worker/
       PlayerLeaderboard.tsx
       Trends.tsx
       EpaChart.tsx
+      Team.tsx             ← multi-season team page (cleanLocation, hexToRgb)
     types/env.d.ts         ← Cloudflare.Env (KV bindings)
   test/                    ← one .test.ts per route + lib unit tests
   wrangler.toml            ← name=sports, KV bindings
