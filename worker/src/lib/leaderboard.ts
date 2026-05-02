@@ -102,6 +102,56 @@ export function leaderTitle(type: LeaderboardType | string): string {
 
 export type PlayerLeaderboardType = "passing" | "rushing" | "receiving";
 
+// Maps a frontend dotted metric path (e.g. "passing.epaPerPlay") to
+// the flat key the percentile records use ("epaPerDropback"). Mirrors
+// getPercentileKey in routes.js:586. Default: pass-through.
+export function getPercentileKey(metric: string): string {
+  switch (metric) {
+    case "overall.epaPerPlay":
+      return "epaPerPlay";
+    case "overall.yardsPerPlay":
+      return "yardsPerPlay";
+    case "overall.successRate":
+      return "successRate";
+    case "passing.epaPerPlay":
+      return "epaPerDropback";
+    case "passing.yardsPerPlay":
+      return "yardsPerDropback";
+    case "passing.successRate":
+      return "passingSuccessRate";
+    case "rushing.epaPerPlay":
+      return "epaPerRush";
+    case "rushing.yardsPerPlay":
+      return "yardsPerRush";
+    case "rushing.successRate":
+      return "rushingSuccessRate";
+    case "overall.havocRate":
+      return "havocRate";
+    case "passing.explosiveRate":
+      return "passingExplosivePlayRate";
+    case "rushing.explosiveRate":
+      return "rushingExplosivePlayRate";
+    case "rushing.opportunityRate":
+      return "rushOpportunityRate";
+    case "rushing.lineYards":
+      return "lineYards";
+    case "rushing.stuffedPlayRate":
+      return "playStuffedRate";
+    case "overall.explosiveRate":
+      return "explosivePlayRate";
+    case "overall.nonExplosiveEpaPerPlay":
+      return "nonExplosiveEpaPerPlay";
+    case "overall.earlyDownEPAPerPlay":
+      return "earlyDownEpaPerPlay";
+    case "overall.lateDownSuccessRate":
+      return "lateDownSuccessRate";
+    case "overall.thirdDownDistance":
+      return "thirdDownDistance";
+    default:
+      return metric;
+  }
+}
+
 // Player leaderboard's filter+sort. Routes.js:845-876. Simpler than
 // the team version: no asc-flip (always descending), no
 // type-collapses-to-overall fallback, no adjEpaPerPlay exception. Drop

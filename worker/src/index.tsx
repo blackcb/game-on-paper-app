@@ -4,16 +4,23 @@
 import { Hono } from "hono";
 import { getGlossary } from "./lib/glossary";
 import {
+  getPercentileKey,
   preparePlayerRows,
   prepareLeaderboardRows,
   type LeaderboardType,
   type PlayerLeaderboardType,
 } from "./lib/leaderboard";
 import { CURRENT_SEASON } from "./lib/season";
-import { retrieveLastUpdated, retrieveLeagueData } from "./lib/summary";
+import {
+  retrieveLastUpdated,
+  retrieveLeagueData,
+  retrievePercentiles,
+} from "./lib/summary";
+import { EpaChartPage, type EpaChartTeam } from "./templates/EpaChart";
 import { GlossaryPage } from "./templates/Glossary";
 import { LeaderboardPage } from "./templates/Leaderboard";
 import { PlayerLeaderboardPage } from "./templates/PlayerLeaderboard";
+import { TrendsPage } from "./templates/Trends";
 
 type Bindings = {
   // KV namespaces (2C). Bulk league/team summary cache + a small
@@ -83,6 +90,67 @@ app.get("/cfb/year/:year/teams/:type", async (c) => {
       lastUpdated={lastUpdated}
     />,
   );
+});
+
+// National trends chart. Pulls 5 percentile bands (1/25/50/75/99) for
+// the requested metric across all available seasons. Differential
+// type silently rewrites to offensive (the chart can't represent
+// differentials). Mirrors routes.js:719-760 — the JSON-by-query-param
+// path is preserved at the top with `?json=1`.
+app.get("/cfb/charts/trends", async (c) => {
+  let type = c.req.query("type") || "offensive";
+  if (type === "differential") type = "offensive";
+  const metric = c.req.query("metric") || "overall.epaPerPlay";
+
+  const PCTILES = [0.01, 0.25, 0.5, 0.75, 0.99];
+  const allPctls = (
+    await Promise.all(PCTILES.map((p) => retrievePercentiles(c.env.LEAGUE_DATA, null, p)))
+  ).flat();
+
+  const pctlKey = getPercentileKey(metric);
+  const selectedPercentiles = allPctls
+    .map((p) => ({ season: p.season, pctile: p.pctile, value: p[pctlKey] }))
+    .filter((p) => p.value !== undefined && p.value !== null);
+
+  const jsonParam = c.req.query("json");
+  if (jsonParam === "true" || jsonParam === "1") {
+    return c.json(selectedPercentiles);
+  }
+
+  const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
+  const seasons = selectedPercentiles
+    .map((b) => b.season)
+    .sort((a, b) => a - b);
+
+  return c.html(
+    <TrendsPage
+      seasons={seasons}
+      percentiles={selectedPercentiles}
+      type={type}
+      metric={metric}
+      lastUpdated={lastUpdated}
+    />,
+  );
+});
+
+// Adj-EPA scatter for a season. Projects league-overall data to four
+// fields per team, lets Chart.js do the rest.
+app.get("/cfb/year/:year/charts/team/epa", async (c) => {
+  const year = parseInt(c.req.param("year"), 10);
+  const baseData = await retrieveLeagueData(c.env.LEAGUE_DATA, year, "overall");
+  const teams: EpaChartTeam[] = baseData.map((t) => {
+    const offensive = (t.offensive as Record<string, Record<string, unknown>> | undefined)?.overall;
+    const defensive = (t.defensive as Record<string, Record<string, unknown>> | undefined)?.overall;
+    return {
+      teamId: t.teamId,
+      team: String(t.team),
+      fbsClass: String(t.fbsClass ?? ""),
+      adjOffEpa: offensive?.adjEpaPerPlay as number | null | undefined,
+      adjDefEpa: defensive?.adjEpaPerPlay as number | null | undefined,
+    };
+  });
+  const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
+  return c.html(<EpaChartPage teams={teams} season={year} lastUpdated={lastUpdated} />);
 });
 
 // Player leaderboard. Same KV-first → summary-fallback shape as the

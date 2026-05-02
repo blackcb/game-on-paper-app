@@ -529,7 +529,12 @@ Port in this order (simplest first, biggest at the end):
   `PlayerLeaderboard.tsx`. Receiving caveat note conditionally rendered.
   Live deploy `/cfb/year/2024/players/passing` returns 200 with title
   + qualifying threshold; empty `<tbody>` until KV gets seeded.
-- ☐ `/cfb/charts/trends`, `/cfb/year/:year/charts/team/epa`.
+- ☑ `/cfb/charts/trends`, `/cfb/year/:year/charts/team/epa`. **Done 2026-05-02.**
+  Added `retrievePercentiles` to the summary lib (KV-first, 3-day TTL,
+  graceful empty-on-error). Added `getPercentileKey` metric→flat-key
+  mapping (21 cases) to leaderboard.ts. Both templates inline the
+  data as JSON for client-side Chart.js to render. The trends `?json=1`
+  passthrough preserved verbatim. Both routes deployed and return 200.
 - ☐ `/cfb/team/:teamId`, `/cfb/year/:year/team/:teamId`.
 - ☐ `/cfb/` (scoreboard) — exercises ESPN scoreboard fetch + Cache API.
 - ☐ `/cfb/year/:year/type/:type/week/:week`, `/cfb/year/:year`.

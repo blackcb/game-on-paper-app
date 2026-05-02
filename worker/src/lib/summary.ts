@@ -94,6 +94,69 @@ export async function retrieveLeagueData(
   return fetchRemoteLeagueData(kv, year, type);
 }
 
+// Percentile rows. Schema is summary-service-defined, fields vary by
+// metric. Only the keys used by getPercentileKey() are accessed.
+export interface PercentileRow {
+  season: number;
+  pctile: number | string;
+  [key: string]: unknown;
+}
+
+async function fetchRemotePercentiles(
+  kv: KVNamespace,
+  year: number | null,
+  pctile: number | null,
+): Promise<PercentileRow[]> {
+  const params = new URLSearchParams();
+  if (year != null) params.set("year", String(year));
+  if (pctile != null) params.set("pctile", String(pctile));
+  const response = await fetch(`${SUMMARY_BASE}/percentiles?${params}`);
+  if (!response.ok) {
+    throw new Error(`summary /percentiles returned ${response.status}`);
+  }
+  const data = (await response.json()) as { results: PercentileRow[] };
+  const content = data.results ?? [];
+  // Same key shape as the Express side: `${year}-percentiles-${pctile}`,
+  // with empty segments for null inputs filtered by generateKey.
+  const keyParts = [year, "percentiles", pctile].filter((p) => p != null);
+  if (keyParts.length > 0) {
+    await kv.put(keyParts.join("-"), JSON.stringify(content), {
+      expirationTtl: TTL_SECONDS,
+    });
+  }
+  return content;
+}
+
+// KV-first percentile reader. Mirrors `retrievePercentiles` in
+// frontend/cfb/routes.js:135. Either `year` or `pctile` (or both) must
+// be provided — calling with both null returns []. The trends route
+// calls this 5x with year=null, pctile=0.01/0.25/0.5/0.75/0.99.
+export async function retrievePercentiles(
+  kv: KVNamespace,
+  year: number | null,
+  pctile: number | null,
+): Promise<PercentileRow[]> {
+  if (year == null && pctile == null) return [];
+  const keyParts = [year, "percentiles", pctile].filter((p) => p != null);
+  const key = keyParts.join("-");
+  const cached = await kv.get(key);
+  if (cached) {
+    try {
+      return JSON.parse(cached) as PercentileRow[];
+    } catch {
+      // Bad JSON in KV — fall through and refetch.
+    }
+  }
+  try {
+    return await fetchRemotePercentiles(kv, year, pctile);
+  } catch (err) {
+    console.log(
+      `summary /percentiles fetch failed for year=${year}, pctile=${pctile}: ${(err as Error).message}`,
+    );
+    return [];
+  }
+}
+
 async function fetchRemoteLastUpdated(kv: KVNamespace): Promise<string | null> {
   const response = await fetch(`${SUMMARY_BASE}/updated`);
   if (!response.ok) return null;
