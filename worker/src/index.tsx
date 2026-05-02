@@ -11,13 +11,20 @@ import {
   type PlayerLeaderboardType,
 } from "./lib/leaderboard";
 import {
+  QUARANTINE_LIST,
+  getPBP,
+  peekCachedPBP,
+  probeEspnPbp,
+  type EspnPbpEnvelope,
+} from "./lib/games";
+import {
   getGames,
   getGroups,
   getWeeksMap,
   hasActiveGames,
   prepareGameList,
 } from "./lib/schedule";
-import { CURRENT_SEASON } from "./lib/season";
+import { CURRENT_SEASON, MIN_SEASON } from "./lib/season";
 import {
   retrieveLastUpdated,
   retrieveLeagueData,
@@ -29,6 +36,15 @@ import { EpaChartPage, type EpaChartTeam } from "./templates/EpaChart";
 import { GlossaryPage } from "./templates/Glossary";
 import { LeaderboardPage } from "./templates/Leaderboard";
 import { PlayerLeaderboardPage } from "./templates/PlayerLeaderboard";
+import { GameErrorPage, type GameErrorGameInfo } from "./templates/GameError";
+import {
+  GamePage,
+  type GameData as RenderableGameData,
+} from "./templates/Game";
+import {
+  PregamePage,
+  type PregameData,
+} from "./templates/Pregame";
 import { ScoreboardPage } from "./templates/Scoreboard";
 import { TeamPage, type TeamData } from "./templates/Team";
 import {
@@ -44,8 +60,10 @@ type Bindings = {
   // wrangler.toml [[kv_namespaces]] entries.
   LEAGUE_DATA: KVNamespace;
   SUMMARY_LAST_UPDATED: KVNamespace;
-  // Container binding (3B), per-route secrets (2B+) get added below
-  // as we port handlers.
+  // Python /cfb/process URL. Plain var for 2B; sub-phase 3B replaces
+  // this with a Container binding (`PBP_PROCESSOR.fetch(...)`) and
+  // the env var goes away.
+  PYTHON_BASE_URL: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -341,6 +359,135 @@ app.get("/cfb/year/:year/team/:teamId", async (c) => {
       players={players}
       season={yearStr}
     />,
+  );
+});
+
+// Per-game PBP page. Mirrors routes.js:414-553.
+//
+// Branches (in order):
+//   1. cache-first fast path: if KV has the processed PBP AND the
+//      cached snapshot reports completed=true (and the gameId isn't
+//      quarantined), skip ESPN entirely and render. Saves ~400 ms.
+//   2. quarantined gameId → game_error template, errorType=quarantine.
+//   3. ESPN PBP probe to determine status. If STATUS_SCHEDULED (or
+//      `?preview_mode={old,new}`), fetch the two team breakdowns from
+//      summary and render the pregame template.
+//   4. otherwise, call Python via getPBP (cache-aware). Render
+//      game.ejs equivalent. On any error, fall back to game_error
+//      with errorType=pbp.
+//
+// `?json=1` short-circuits the HTML render at any branch where
+// processed PBP is in hand and returns it as JSON.
+//
+// The full game template (charts/box score/PBP table) is mid-port —
+// see Game.tsx. The chrome + scoring summary render today; the
+// chart-heavy sections land in a follow-up commit.
+function clampSeason(input: number | undefined): number {
+  if (input == null || Number.isNaN(input)) return CURRENT_SEASON;
+  return Math.min(Math.max(input, MIN_SEASON), CURRENT_SEASON);
+}
+
+function gameInfoFromEspnEnvelope(envelope: EspnPbpEnvelope) {
+  const competition = envelope.gamepackageJSON?.header?.competitions?.[0];
+  return competition;
+}
+
+app.get("/cfb/game/:gameId", async (c) => {
+  const gameId = c.req.param("gameId");
+  const isJsonShortcut =
+    c.req.query("json") === "true" || c.req.query("json") === "1";
+  const previewMode = c.req.query("preview_mode");
+
+  // Fast path: cached completed game, not quarantined.
+  if (!QUARANTINE_LIST.has(gameId)) {
+    const cached = await peekCachedPBP(c.env.LEAGUE_DATA, gameId);
+    if (cached?.gameInfo?.status?.type?.completed === true) {
+      if (isJsonShortcut) return c.json(cached);
+      const season = clampSeason(cached.header?.season?.year);
+      let percentiles: unknown[] = [];
+      try {
+        percentiles = await retrievePercentiles(c.env.LEAGUE_DATA, season, null);
+      } catch (err) {
+        console.log(`percentiles fetch failed (cached path): ${(err as Error).message}`);
+      }
+      return c.html(
+        <GamePage gameData={cached as unknown as RenderableGameData} percentiles={percentiles} season={season} />,
+      );
+    }
+  }
+
+  // Probe ESPN to decide pregame vs game vs error. Any failure here
+  // means we can't even render an error page (the error page needs
+  // the gameInfo for the score header), so let Hono's 500 handler
+  // take it.
+  let envelope: EspnPbpEnvelope;
+  try {
+    envelope = await probeEspnPbp(gameId);
+  } catch (err) {
+    throw new Error(`ESPN PBP probe failed for ${gameId}: ${(err as Error).message}`);
+  }
+  const competition = gameInfoFromEspnEnvelope(envelope);
+  if (competition == null) {
+    throw new Error(`ESPN PBP envelope had no header.competitions[0] for ${gameId}`);
+  }
+  const season = envelope.gamepackageJSON?.header?.season?.year ?? CURRENT_SEASON;
+  const week = envelope.gamepackageJSON?.header?.week ?? 0;
+  const homeComp = competition.competitors?.[0];
+  const awayComp = competition.competitors?.[1];
+  const homeTeam = homeComp?.team;
+  const awayTeam = awayComp?.team;
+  const isScheduled =
+    competition.status?.type?.name === "STATUS_SCHEDULED" ||
+    previewMode === "old" ||
+    previewMode === "new";
+
+  if (isScheduled && homeTeam?.id != null && awayTeam?.id != null) {
+    // Pregame: pull both teams' summary breakdowns in parallel.
+    const [awayBreakdown, homeBreakdown] = await Promise.all([
+      retrieveTeamData(c.env.LEAGUE_DATA, season, awayTeam.id, "overall"),
+      retrieveTeamData(c.env.LEAGUE_DATA, season, homeTeam.id, "overall"),
+    ]);
+    const pregameData: PregameData = {
+      gameInfo: competition as PregameData["gameInfo"],
+      header: (envelope.gamepackageJSON?.header ?? {}) as PregameData["header"],
+      matchup: {
+        team: [
+          ...(awayBreakdown as unknown as Array<Record<string, unknown>>),
+          ...(homeBreakdown as unknown as Array<Record<string, unknown>>),
+        ],
+      },
+    };
+    return c.html(
+      <PregamePage gameData={pregameData} season={season} week={week} viewFull={previewMode === "old"} />,
+    );
+  }
+
+  // Quarantine gate: short-circuit before paying the Python cost.
+  if (QUARANTINE_LIST.has(gameId)) {
+    return c.html(
+      <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="quarantine" />,
+    );
+  }
+
+  // Past or live game → fetch processed PBP via Python (cache-aware).
+  const data = await getPBP(c.env.LEAGUE_DATA, c.env.PYTHON_BASE_URL, gameId);
+  if (data == null || data.gameInfo == null) {
+    return c.html(
+      <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="pbp" />,
+    );
+  }
+  if (isJsonShortcut) return c.json(data);
+
+  const headerSeason = data.header?.season?.year ?? season;
+  const clamped = clampSeason(headerSeason);
+  let percentiles: unknown[] = [];
+  try {
+    percentiles = await retrievePercentiles(c.env.LEAGUE_DATA, clamped, null);
+  } catch (err) {
+    console.log(`percentiles fetch failed: ${(err as Error).message}`);
+  }
+  return c.html(
+    <GamePage gameData={data as unknown as RenderableGameData} percentiles={percentiles} season={clamped} />,
   );
 });
 

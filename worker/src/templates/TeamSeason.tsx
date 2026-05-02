@@ -1,26 +1,19 @@
 import type { FC, Child } from "hono/jsx";
 import { Layout } from "./Layout";
 import { GameThumb } from "./GameThumb";
+import { TeamCard } from "./TeamCard";
+import { TeamSlice } from "./TeamSlice";
 import { roundNumber } from "../lib/leaderboard";
 import {
-  STAT_KEY_TITLE_MAPPING,
-  TEAM_SLICE_COLUMNS,
-  buildSliceCells,
   cleanLocation,
-  getNumberWithOrdinal,
   hexToRgb,
-  maxTeamsForSeason,
-  sliceColorRamp,
-  teamCardMarginal,
   type ScheduleEvent,
-  type SliceSituation,
-  type SliceTarget,
 } from "../lib/team_helpers";
 
-// Reproduces frontend/views/pages/cfb/team_season.ejs and four of the
-// five EJS partials it composes (team_card, team_player_cards,
-// team_slice ×6, player_box ×3). The fifth — game_thumb — lives in
-// templates/GameThumb.tsx so the scoreboard family can share it.
+// Reproduces frontend/views/pages/cfb/team_season.ejs and two of its
+// five EJS partials (team_player_cards, player_box). The other three
+// — team_card, team_slice, and game_thumb — live in their own
+// modules so other pages (Pregame, Scoreboard) can share them.
 
 export interface TeamData {
   id: string | number;
@@ -58,133 +51,6 @@ interface Props {
   season: number | string;
 }
 
-// ---------- team_card ------------------------------------------------
-
-interface TeamCardProps {
-  teamData: TeamData;
-  breakdown: Array<Record<string, unknown>>;
-  season: number | string;
-  hideNavigation: boolean;
-}
-
-const TeamCard: FC<TeamCardProps> = ({ teamData, breakdown, season, hideNavigation }) => {
-  const team = teamData;
-  const location = cleanLocation({ id: team.id, location: team.location });
-  const maxTeams = maxTeamsForSeason(season);
-  const records = teamData.record ?? [];
-  const overallStuff = records.find((r) => r.type === "total");
-  const overall = overallStuff?.displayValue ?? "0-0";
-  const finishStat = overallStuff?.stats?.find((s) => s.name === "playoffSeed");
-  const finish = finishStat
-    ? getNumberWithOrdinal(parseInt(String(finishStat.displayValue), 10))
-    : "N/A";
-  const confRecs = records.filter((r) => r.type === "vsconf");
-  const conf = confRecs.length > 0 ? ` (Conf: ${confRecs[0].displayValue})` : "";
-
-  const first = (breakdown[0] ?? {}) as Record<string, Record<string, Record<string, unknown>> | unknown>;
-  const isBreakdownAvailable = first.differential != null;
-  const diff = (first.differential as Record<string, Record<string, unknown>> | undefined)?.overall ?? {};
-  const yearPrefix =
-    (first as { season?: unknown }).season &&
-    String(season) !== String((first as { season?: unknown }).season)
-      ? `${(first as { season?: unknown }).season} `
-      : "";
-
-  const rampClass = (rank: unknown): string => {
-    const c = sliceColorRamp(rank);
-    if (!c) return "";
-    // The EJS variant divides by maxTeams (130/131/134) instead of the
-    // hardcoded 130 in sliceColorRamp. Recompute here for fidelity.
-    if (rank == null || rank === "") return "";
-    const value = (maxTeams - parseFloat(String(rank))) / maxTeams;
-    const step = Math.round(value / 0.1);
-    const clamped = Math.min(Math.max(step, 0), 9);
-    if (clamped === 4 || clamped === 5) return "";
-    return ` hulk-bg-level-${clamped}`;
-  };
-
-  const cell = (
-    statKey: string,
-    formatter: (n: number) => string,
-  ) => {
-    const stat = diff[statKey] as number | undefined;
-    const rank = diff[`${statKey}Rank`];
-    return (
-      <td class={`numeral text-center${rampClass(rank)}`} style="width: 33%">
-        {formatter(parseFloat(String(stat ?? 0)))}
-        {rank != null && (
-          <small class="align-self-center" style="opacity: 50%">
-            {" "}
-            #{rank as Child}
-          </small>
-        )}
-      </td>
-    );
-  };
-
-  return (
-    <div class="card border rounded">
-      <div class="card-body">
-        <div class="card-title mb-0">
-          <div class="d-flex align-items-center justify-content-between">
-            <h2>{location}</h2>
-            <img
-              class={`h2 img img-fluid me-1 team-logo-${team.id}`}
-              width="50px"
-              src={`https://a.espncdn.com/i/teamlogos/ncaa/500/${team.id}.png`}
-            />
-          </div>
-        </div>
-        <div class="table-responsive">
-          <table class="table table-sm table-responsive">
-            <thead>
-              <th class="text-center" style="width: 33%">{season} Record</th>
-              <th class="text-center" style="width: 33%">{season} Conf Finish</th>
-              <th class="text-center" style="width: 33%">{yearPrefix}EPA/Play</th>
-            </thead>
-            <tbody>
-              <tr>
-                <td class="numeral text-center" style="width: 33%">
-                  {overall}
-                  {conf}
-                </td>
-                <td class="numeral text-center" style="width: 33%">{finish}</td>
-                {cell("epaPerPlay", (n) => teamCardMarginal(n, 2, 2))}
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="table-responsive pe-0">
-          <table class="table table-sm table-responsive">
-            <caption class="text-small text-muted">
-              <small>
-                <p class="mb-0">
-                  Stats shown as margins. AY% (available yards pct) concept from Brian Fremeau (
-                  <a href="http://bcftoys.com">http://bcftoys.com</a>).
-                </p>
-              </small>
-            </caption>
-            <thead>
-              <th class="text-center" style="width: 33%">{yearPrefix}Yards/Play</th>
-              <th class="text-center" style="width: 33%">{yearPrefix}AY%</th>
-              <th class="text-center" style="width: 33%">{yearPrefix}Success %</th>
-            </thead>
-            <tbody>
-              <tr>
-                {cell("yardsPerPlay", (n) => teamCardMarginal(n, 2, 2))}
-                {cell("availableYardsPct", (n) => `${teamCardMarginal(100 * n, 2, 1)}%`)}
-                {cell("successRate", (n) => `${teamCardMarginal(100 * n, 2, 1)}%`)}
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        {isBreakdownAvailable && !hideNavigation && (
-          <a class="text-left" href={`/cfb/year/${season}/team/${team.id}`}>View full profile</a>
-        )}
-      </div>
-    </div>
-  );
-};
 
 // ---------- team_player_cards ---------------------------------------
 
@@ -301,68 +167,6 @@ const TeamPlayerCards: FC<TeamPlayerCardsProps> = ({ teamData, players, season }
   );
 };
 
-// ---------- team_slice ----------------------------------------------
-
-interface TeamSliceProps {
-  breakdown: Array<Record<string, unknown>>;
-  title: string;
-  target: SliceTarget;
-  situation: SliceSituation;
-}
-
-const TeamSlice: FC<TeamSliceProps> = ({ breakdown, title, target, situation }) => {
-  const columns = TEAM_SLICE_COLUMNS[target][situation];
-  return (
-    <div class="table-responsive">
-      <table class="table table-sm table-responsive">
-        <thead>
-          <tr>
-            <th style="text-align: left; width: 50%;">{title}</th>
-            <th style="width: 50%">
-              <span hidden>Value</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {columns.map((item) => {
-            const cells = buildSliceCells(item, breakdown, target, situation);
-            return (
-              <tr>
-                <td style="text-align: left; width: 50%;">
-                  {STAT_KEY_TITLE_MAPPING[item] ?? item}
-                </td>
-                {cells.map((c) =>
-                  c == null ? (
-                    <td class="numeral" style="text-align: center;width: 50%;">
-                      N/A{" "}
-                      <small class="align-self-center" style="opacity: 50%">
-                        {" "}
-                        N/A
-                      </small>
-                    </td>
-                  ) : (
-                    <td
-                      class={`align-self-center numeral${c.colorClass ? ` ${c.colorClass}` : ""}`}
-                      style="text-align: center;width: 50%;"
-                    >
-                      {c.sign}
-                      {c.text}
-                      {c.rankString && (
-                        <small class="align-self-center" style="opacity: 50%">
-                          {c.rankString}
-                        </small>
-                      )}
-                    </td>
-                  ),
-                )}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-};
 
 // ---------- player_box ----------------------------------------------
 

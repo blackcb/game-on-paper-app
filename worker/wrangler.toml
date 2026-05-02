@@ -40,3 +40,12 @@ id = "649602a55c7048c5ba433bdece6ba731"
 [[kv_namespaces]]
 binding = "SUMMARY_LAST_UPDATED"
 id = "564be97a4ca8419a9ccdc8b0be0f1c3d"
+
+# Python service URL for /cfb/process. In production this points at
+# the droplet's Python container; sub-phase 3B replaces it with a
+# Container binding (`env.PBP_PROCESSOR.fetch(...)`) and this var
+# goes away. Default value here is the Express stack's internal
+# URL — safe because wrangler dev never reaches it; production sets
+# this via `wrangler secret put PYTHON_BASE_URL`.
+[vars]
+PYTHON_BASE_URL = "http://python:7000"

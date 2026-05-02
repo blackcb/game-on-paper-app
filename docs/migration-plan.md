@@ -40,13 +40,19 @@ USER ACTION step without confirmation from the user.**
     * `/cfb/` (today's scoreboard)
     * `/cfb/year/:year/type/:type/week/:week` (week scoreboard)
     * `/cfb/year/:year` (year scoreboard, defaults to type=2 week=1)
-    * + `/`, `/cfb/healthcheck` placeholders
-  - 2B routes pending: `/cfb/game/:gameId`.
+    * `/cfb/game/:gameId` (route + cache + Python proxy + game_error
+      + pregame + Game stub — full game template port pending)
+    * + `/cfb/healthcheck` placeholder
+  - 2B routes pending: full game template port (charts, drive chart,
+    advanced box score, slim_box_score, field, pass_chart,
+    rush_chart, PBP table). Route is live with a stub Game.tsx that
+    renders chrome + scoring summary + a "see upstream" notice.
   - 2D (Cache API) / 2E (assets) / 2F (cron) / 2H (cutover): not started
-  - 2G (tests): 113 vitest assertions, ~2.1 s.
+  - 2G (tests): 128 vitest assertions, ~2.7 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-02 (Phase 2B — scoreboard family shipped)
+- Last updated: 2026-05-02 (Phase 2B — game route shipped with stub
+  Game template; full template port pending)
 
 ## Resume hint for Claude Code
 
@@ -604,9 +610,28 @@ Port in this order (simplest first, biggest at the end):
   `templates/GameThumb.tsx` so both pages share one definition.
   Live deploy: `/cfb/` returns 99 game thumbs (213 KB), the year
   variants return 100 (243 KB).
-- ☐ `/cfb/game/:gameId` — the big one. Exercises ESPN PBP fetch, Python
-  service call, percentile lookup, error/quarantine handling, and the
-  100KB game.ejs render.
+- ◐ `/cfb/game/:gameId` — **route + branches done, full Game template
+  pending.** **Started 2026-05-02.** Game data layer at `lib/games.ts`:
+  KV-backed cache (`cfb-game-${id}` keys, 60s TTL on in-progress, 1
+  day on completed; sub-phase 2D will swap KV for Cache API), Python
+  proxy via `env.PYTHON_BASE_URL`, `calculateGEI` ported verbatim
+  with the original last-play finalWP semantics, `cleanName`
+  helper for the Georgia-61 nickname-lowercase rule, and the
+  `QUARANTINE_LIST` constant. Route handles all six branches: cache-
+  first JSON shortcut, cache-first HTML render, ESPN probe →
+  scheduled→pregame, quarantined→game_error, Python failure→game_error,
+  successful Python→Game stub. `?json=1` works at every branch where
+  PBP is in hand. `templates/GameError.tsx` and `templates/Pregame.tsx`
+  are full ports (matchup partial inlined as a JSX subcomponent
+  inside Pregame). `templates/Game.tsx` is a deliberate stub —
+  renders score header + scoring summary + a notice pointing
+  upstream + the JSON shortcut. Live deploys: quarantined IDs
+  render the quarantine page; non-quarantined IDs without Python
+  reachability render the pbp-error page (Python's internal
+  `http://python:7000` URL isn't routable from the CF edge yet —
+  resolves at sub-phase 3B Container binding or 2H cutover).
+  TeamCard, TeamSlice, GameThumb hoisted to their own template
+  modules so all three game branches can share them.
 
 For each route:
 - Translate Express handler → Hono handler.
@@ -730,24 +755,28 @@ Two options, pick one:
 
 #### Resume hint (next session)
 
-Scoreboard family is done. The only remaining 2B route is the big
-one: `/cfb/game/:gameId`. It's the only route that calls the Python
-service, embeds the heaviest EJS template (`game.ejs` + the
-`field`/`pass_chart`/`rush_chart`/`team_card`/`team_slice`/`matchup`/
-`slim_box_score`/`pregame`/`game_error` partials), and is the right
-moment to land sub-phase 2D (Cache API) — per-game PBP is the big
-cacheable thing.
+Game route is wired but `templates/Game.tsx` is a stub that renders
+chrome + scoring summary + a "see upstream" notice. Next session:
+finish porting `frontend/views/pages/cfb/game.ejs` (1501 lines) and
+its four remaining partials:
 
-Game route's data flow on the Express side
-(`frontend/cfb/routes.js:414-554`): ESPN scoreboard probe → cache-
-first via `Games.getPBP` → if cache empty or in-progress > 30s old,
-call Python `/cfb/process` → render `pages/cfb/game` (or
-`pages/cfb/pregame` for scheduled, `pages/cfb/game_error` for the
-QUARANTINE_LIST or thrown errors). The Python URL on the worker side
-will need to be a binding (env var for now, container binding at 3B).
+- `slim_box_score.ejs` (264 lines) — team-vs-team line score table.
+- `field.ejs` (31 lines) — drive-chart-friendly SVG football field.
+- `pass_chart.ejs` (222 lines) — passing chart (target depth × yards).
+- `rush_chart.ejs` (94 lines) — rushing chart.
+
+The chart partials inline a lot of D3/Chart.js wiring; check whether
+a JSON island + unmodified `/assets/js` script works (same pattern
+as Team.tsx / Pregame.tsx) before reimplementing chart code in
+JSX. Server-side: the win-prob chart, drive chart, advanced box
+score, and play-by-play table all read from `gameData` directly,
+so a faithful port should be mechanical even though it's tall.
+
+Then sub-phase 2D (Cache API) becomes worth doing — `caches.default`
+keyed by URL replaces the current KV-based per-game cache.
 
 Verification before starting: `cd worker && npx vitest run` should
-pass 113 tests in ~2.1s, `npx tsc --noEmit` clean. The token is in
+pass 128 tests in ~2.7s, `npx tsc --noEmit` clean. The token is in
 `~/.zshrc`; pull it with `eval "$(grep '^export CLOUDFLARE_API_TOKEN' ~/.zshrc)"`
 in any subprocess that needs Cloudflare access.
 
@@ -762,6 +791,9 @@ worker/
       schedule.json        ← bundled (75 KB)
       groups.json          ← bundled (2 KB)
     lib/
+      games.ts             ← getPBP/peekCachedPBP (KV cache),
+                            probeEspnPbp, calculateGEI, cleanName,
+                            QUARANTINE_LIST
       glossary.ts
       leaderboard.ts       ← helpers + getPercentileKey + prepare*Rows
       schedule.ts          ← getWeeksMap, getGroups, getGames,
@@ -780,12 +812,21 @@ worker/
       Trends.tsx
       EpaChart.tsx
       Team.tsx             ← multi-season team page
-      TeamSeason.tsx       ← per-season team page + 4 inlined
-                            partials (TeamCard, TeamPlayerCards,
-                            TeamSlice, PlayerBox)
+      TeamSeason.tsx       ← per-season team page + 2 inlined
+                            partials (TeamPlayerCards, PlayerBox)
+      TeamCard.tsx         ← team summary card, shared by
+                            TeamSeason + Pregame
+      TeamSlice.tsx        ← stat-slice table, shared by
+                            TeamSeason + Pregame
       GameThumb.tsx        ← schedule grid card, shared by
                             TeamSeason + Scoreboard
       Scoreboard.tsx       ← /cfb/, /cfb/year/:year, week scoreboard
+      GameError.tsx        ← /cfb/game/:id error variants
+      Pregame.tsx          ← scheduled-game preview + matchup
+                            (matchup partial inlined as subcomponent)
+      Game.tsx             ← STUB: chrome + scoring summary +
+                            "see upstream" notice. Full game.ejs
+                            port is the next commit.
     types/env.d.ts         ← Cloudflare.Env (KV bindings)
   test/                    ← one .test.ts per route + lib unit tests
   wrangler.toml            ← name=sports, KV bindings
