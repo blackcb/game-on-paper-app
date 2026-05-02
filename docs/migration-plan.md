@@ -36,14 +36,14 @@ USER ACTION step without confirmation from the user.**
     * `/cfb/charts/trends`
     * `/cfb/year/:year/charts/team/epa`
     * `/cfb/team/:teamId` (multi-season team page)
+    * `/cfb/year/:year/team/:teamId` (per-season team page)
     * + `/`, `/cfb/`, `/cfb/healthcheck` placeholders
-  - 2B routes pending: `/cfb/year/:year/team/:teamId`, scoreboard,
-    week scoreboards, game.
+  - 2B routes pending: scoreboard, week scoreboards, game.
   - 2D (Cache API) / 2E (assets) / 2F (cron) / 2H (cutover): not started
-  - 2G (tests): 76 vitest assertions, ~2.0 s.
+  - 2G (tests): 98 vitest assertions, ~1.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-02 (Phase 2B mid-stream — `/cfb/team/:teamId` shipped)
+- Last updated: 2026-05-02 (Phase 2B — both team views shipped)
 
 ## Resume hint for Claude Code
 
@@ -561,7 +561,26 @@ Port in this order (simplest first, biggest at the end):
   `[{teamId, pos_team}]` sentinel because the internal
   `http://summary:3000` URL isn't reachable from CF edge — same
   posture as the leaderboards, real data fills in at 2H.
-- ☐ `/cfb/year/:year/team/:teamId`.
+- ☑ `/cfb/year/:year/team/:teamId`. **Done 2026-05-02.** Per-season
+  team page; the largest pure-EJS port left. ESPN season payload via
+  `getTeamSeasonInformation`, four parallel `retrieveTeamData` calls
+  (`overall` + `passing` + `rushing` + `receiving`) feed the
+  breakdown panels and player boxes. The five EJS partials
+  (`team_card`, `team_player_cards`, `team_slice`, `player_box`,
+  `game_thumb`) are inlined as JSX subcomponents in
+  `templates/TeamSeason.tsx` since they don't reuse outside this page
+  yet (`game_thumb` will move to its own module when the scoreboard
+  port lands and starts rendering the same card grid). Shared
+  team-flavored helpers — `cleanLocation`, `cleanAbbreviation`,
+  `hexToRgb`, `getNumberWithOrdinal`, `maxTeamsForSeason`,
+  `teamCardMarginal`, `sliceColorRamp`, `buildSliceCells`,
+  `calculateSpiceLevel`, `CONFERENCE_MAP`, `FBS_CONFERENCES`, `SPICE`
+  — extracted to `lib/team_helpers.ts`. Live deploy at
+  `sports.unseen-university.workers.dev/cfb/year/2024/team/61`
+  renders 568KB: breadcrumb + team card + radar canvases +
+  breakdown panels + player box scaffolding + 14 schedule thumbs
+  driven by real ESPN data. Player rows are sentinel-empty until 2H,
+  same as the other summary-backed routes.
 - ☐ `/cfb/` (scoreboard) — exercises ESPN scoreboard fetch + Cache API.
 - ☐ `/cfb/year/:year/type/:type/week/:week`, `/cfb/year/:year`.
 - ☐ `/cfb/game/:gameId` — the big one. Exercises ESPN PBP fetch, Python
@@ -690,20 +709,21 @@ Two options, pick one:
 
 #### Resume hint (next session)
 
-`/cfb/team/:teamId` is done. Next up is `/cfb/year/:year/team/:teamId`
-— the per-season team page (`team_season.ejs` ~417 lines + 5 partials
-totaling ~700 more lines: matchup, team_card, team_player_cards,
-team_slice, pass_chart, rush_chart). Use `getTeamSeasonInformation`
-(already in `lib/teams.ts`) for the season-scoped ESPN payload and
-`retrieveTeamData(env.LEAGUE_DATA, year, teamId, null)` for the
-per-season breakdown.
+Both team views are done. Next up is the scoreboard family — start
+with `/cfb/` (today's scoreboard), then the year/week variants
+(`/cfb/year/:year/type/:type/week/:week`, `/cfb/year/:year`). These
+hit ESPN's scoreboard endpoint and reuse the `GameThumb` component
+that already lives in `templates/TeamSeason.tsx` — when porting the
+scoreboard, lift `GameThumb` out into its own `templates/GameThumb.tsx`
+so both pages can import it.
 
-Acceptable detour: skip ahead to the scoreboard `/cfb/` (uses ESPN's
-scoreboard endpoint) if context budget for the team_season port is
-unavailable. team_season is the largest pure-EJS port left.
+The actual heavy lift after the scoreboard family is `/cfb/game/:gameId`
+— the only route that calls the Python service. That's the right
+moment to land sub-phase 2D (Cache API), since per-game PBP is the
+big cacheable thing.
 
 Verification before starting: `cd worker && npx vitest run` should
-pass 76 tests in ~2.0s, `npx tsc --noEmit` clean. The token is in
+pass 98 tests in ~1.9s, `npx tsc --noEmit` clean. The token is in
 `~/.zshrc`; pull it with `eval "$(grep '^export CLOUDFLARE_API_TOKEN' ~/.zshrc)"`
 in any subprocess that needs Cloudflare access.
 
@@ -719,6 +739,9 @@ worker/
       season.ts            ← CURRENT_SEASON, MIN_SEASON
       summary.ts           ← KV-first retrieve* helpers
       teams.ts             ← ESPN getTeamInformation + season variant
+      team_helpers.ts      ← cleanLocation/Abbrev, hexToRgb,
+                            ordinal, slice cell formatting,
+                            spice level, conference map
     templates/
       Layout.tsx           ← shared chrome (head/nav/footer/scripts)
       Glossary.tsx
@@ -726,7 +749,10 @@ worker/
       PlayerLeaderboard.tsx
       Trends.tsx
       EpaChart.tsx
-      Team.tsx             ← multi-season team page (cleanLocation, hexToRgb)
+      Team.tsx             ← multi-season team page
+      TeamSeason.tsx       ← per-season team page + 5 inlined
+                            partials (TeamCard, TeamPlayerCards,
+                            TeamSlice, PlayerBox, GameThumb)
     types/env.d.ts         ← Cloudflare.Env (KV bindings)
   test/                    ← one .test.ts per route + lib unit tests
   wrangler.toml            ← name=sports, KV bindings

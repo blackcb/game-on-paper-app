@@ -1,5 +1,8 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "./Layout";
+import { cleanLocation, hexToRgb } from "../lib/team_helpers";
+
+export { hexToRgb } from "../lib/team_helpers";
 
 // Reproduces frontend/views/pages/cfb/team.ejs. Multi-season team
 // page: metric-history line chart (Chart.js) plus season-selectable
@@ -29,38 +32,6 @@ interface Props {
   lastUpdated: string | null;
 }
 
-// EJS team.ejs:18-24 — Georgia (id 61) is uppercased in the ESPN
-// payload but should render lowercased for the canonical site voice.
-const LOWERCASE_TEAMS = new Set([61]);
-
-function cleanLocation(team: TeamData): string {
-  const location = String(team.location ?? "");
-  if (LOWERCASE_TEAMS.has(parseInt(String(team.id), 10))) {
-    return location.toLocaleLowerCase();
-  }
-  return location;
-}
-
-interface RGB {
-  r: number;
-  g: number;
-  b: number;
-}
-
-// EJS team.ejs:26-33. Returns null on a non-hex input rather than
-// throwing — the template tolerates a null alternateColor and the
-// client-side team_chart.js handles `null`.
-export function hexToRgb(hex: string | null | undefined): RGB | null {
-  if (hex == null) return null;
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  if (!result) return null;
-  return {
-    r: parseInt(result[1], 16),
-    g: parseInt(result[2], 16),
-    b: parseInt(result[3], 16),
-  };
-}
-
 export const TeamPage: FC<Props> = ({
   teamData,
   breakdowns,
@@ -70,7 +41,7 @@ export const TeamPage: FC<Props> = ({
   metric,
   lastUpdated,
 }) => {
-  const location = cleanLocation(teamData);
+  const location = cleanLocation({ id: teamData.id, location: teamData.location });
   const yearRange =
     seasons.length > 1 ? `${seasons[0]} to ${seasons[seasons.length - 1]}` : `${seasons[0] ?? ""}`;
   const title = `${location} | ${yearRange} | Game on Paper`;

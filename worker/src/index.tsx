@@ -17,12 +17,17 @@ import {
   retrievePercentiles,
   retrieveTeamData,
 } from "./lib/summary";
-import { getTeamInformation } from "./lib/teams";
+import { getTeamInformation, getTeamSeasonInformation } from "./lib/teams";
 import { EpaChartPage, type EpaChartTeam } from "./templates/EpaChart";
 import { GlossaryPage } from "./templates/Glossary";
 import { LeaderboardPage } from "./templates/Leaderboard";
 import { PlayerLeaderboardPage } from "./templates/PlayerLeaderboard";
 import { TeamPage, type TeamData } from "./templates/Team";
+import {
+  TeamSeasonPage,
+  type PlayersByType,
+  type TeamData as SeasonTeamData,
+} from "./templates/TeamSeason";
 import { TrendsPage } from "./templates/Trends";
 
 type Bindings = {
@@ -224,6 +229,52 @@ app.get("/cfb/team/:teamId", async (c) => {
       type={type}
       metric={metric}
       lastUpdated={lastUpdated}
+    />,
+  );
+});
+
+// Per-season team page. Mirrors routes.js:556-583. ESPN season-scoped
+// payload (record + athletes + ranks + leaders + schedule) plus four
+// retrieveTeamData calls (overall + passing + rushing + receiving) for
+// the breakdown panels and player_box rows. The `?json=1` shortcut
+// returns the raw ESPN payload.
+app.get("/cfb/year/:year/team/:teamId", async (c) => {
+  const yearStr = c.req.param("year");
+  const year = parseInt(yearStr, 10);
+  const teamId = c.req.param("teamId");
+
+  const data = await getTeamSeasonInformation(year, teamId);
+  if (data == null) {
+    throw new Error(
+      `Data not available for team ${teamId} and season ${yearStr}. An internal service may be down.`,
+    );
+  }
+
+  const jsonParam = c.req.query("json");
+  if (jsonParam === "true" || jsonParam === "1") {
+    return c.json(data);
+  }
+
+  // Four parallel summary fetches, one per stat slice.
+  const [breakdown, passing, rushing, receiving] = await Promise.all([
+    retrieveTeamData(c.env.LEAGUE_DATA, year, teamId, "overall"),
+    retrieveTeamData(c.env.LEAGUE_DATA, year, teamId, "passing"),
+    retrieveTeamData(c.env.LEAGUE_DATA, year, teamId, "rushing"),
+    retrieveTeamData(c.env.LEAGUE_DATA, year, teamId, "receiving"),
+  ]);
+
+  const players: PlayersByType = {
+    passing: passing as unknown as PlayersByType["passing"],
+    rushing: rushing as unknown as PlayersByType["rushing"],
+    receiving: receiving as unknown as PlayersByType["receiving"],
+  };
+
+  return c.html(
+    <TeamSeasonPage
+      teamData={data as SeasonTeamData}
+      breakdown={breakdown as unknown as Array<Record<string, unknown>>}
+      players={players}
+      season={yearStr}
     />,
   );
 });
