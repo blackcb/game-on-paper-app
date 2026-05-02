@@ -509,8 +509,17 @@ Port in this order (simplest first, biggest at the end):
   components reproduce the four EJS partials. 17 KB rendered, all 12
   letters + alphabetized terms + HTML-in-definitions intact.
 - ☐ Static redirects (`/cfb/teams`, `/cfb/players`, etc.).
-- ☐ `/cfb/year/:year/teams/:type` (leaderboard) — exercises KV reads from
-  the summary service.
+- ☑ `/cfb/year/:year/teams/:type` (leaderboard) — exercises KV reads from
+  the summary service. **Done 2026-05-02.** Helpers (`roundNumber`,
+  `generateMarginalString`, `cleanRank`, `generateColorRampValue`,
+  `retrieveValue`, `cleanField`) ported to `worker/src/lib/leaderboard.ts`
+  with full unit coverage. Server-side filter+sort+ascending-flip in
+  `prepareLeaderboardRows` matches Express's behavior bit-for-bit
+  (differential-falls-back-to-adjEpaPerPlay rule, defensive sort
+  inversion). 316-line EJS template ported to `Leaderboard.tsx`,
+  including the per-team dark-mode logo `<style>` block. Live deploy
+  renders the chrome but empty `<tbody>` (internal `summary:3000` URL
+  isn't reachable from CF edge); real data flows in at sub-phase 2H.
 - ☐ `/cfb/year/:year/players/:type` (player leaderboard).
 - ☐ `/cfb/charts/trends`, `/cfb/year/:year/charts/team/epa`.
 - ☐ `/cfb/team/:teamId`, `/cfb/year/:year/team/:teamId`.
