@@ -8,6 +8,8 @@
 # if that lands.
 name = "gameonpaper-experiment"
 main = "src/index.ts"
+# Chris Black's personal account (the one hosting unseen-university.org).
+account_id = "ebe521cb5b561683303b77d32e240ba4"
 # 2026-05-02: today's date. Bumping this opts into newer Workers
 # runtime semantics; do it deliberately, not as a refactor side effect.
 compatibility_date = "2026-05-02"
@@ -21,3 +23,19 @@ compatibility_flags = ["nodejs_compat"]
 # port without env wiring.
 [dev]
 port = 8787
+
+# KV bindings — replace the LRU Redis instance (port 6379 in the
+# Express stack) with two namespaces:
+#   - LEAGUE_DATA: bulk league/team summary cache. Keys like
+#     `${year}-${type}` (3-day TTL via expirationTtl on writes).
+#   - SUMMARY_LAST_UPDATED: small, isolated namespace so list
+#     operations on the bulk data namespace stay fast.
+# IDs are namespace-stable; rotating them would orphan all cached
+# data, so update in place if the binding name ever changes.
+[[kv_namespaces]]
+binding = "LEAGUE_DATA"
+id = "649602a55c7048c5ba433bdece6ba731"
+
+[[kv_namespaces]]
+binding = "SUMMARY_LAST_UPDATED"
+id = "564be97a4ca8419a9ccdc8b0be0f1c3d"

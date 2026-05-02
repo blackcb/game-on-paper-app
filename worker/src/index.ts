@@ -6,7 +6,13 @@
 import { Hono } from "hono";
 
 type Bindings = {
-  // KV / Container / secrets bindings get added here in 2B–2D.
+  // KV namespaces (2C). Bulk league/team summary cache + a small
+  // isolated namespace for the last-updated stamp, mirroring the
+  // wrangler.toml [[kv_namespaces]] entries.
+  LEAGUE_DATA: KVNamespace;
+  SUMMARY_LAST_UPDATED: KVNamespace;
+  // Container binding (3B), per-route secrets (2B+) get added below
+  // as we port handlers.
 };
 
 const app = new Hono<{ Bindings: Bindings }>();

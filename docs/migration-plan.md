@@ -19,8 +19,10 @@ USER ACTION step without confirmation from the user.**
 - **Phase 2 — Worker rewrite + KV + Pages (Tier 2)**:
   - 2A scaffolding: **completed 2026-05-02** (Hono + TS + Wrangler);
     `worker/` directory live, `wrangler dev` smoke-tested locally.
-    Remaining USER ACTION: Cloudflare API token for `wrangler deploy`.
-  - 2B–2H: not started
+  - 2C KV namespaces: **created 2026-05-02** (`LEAGUE_DATA`,
+    `SUMMARY_LAST_UPDATED`); `wrangler deploy --dry-run` validates.
+  - 2B (route porting) / 2D (Cache API) / 2E (assets) / 2F (cron)
+    / 2G (tests) / 2H (cutover): not started
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
 - Last updated: 2026-05-02
@@ -519,17 +521,16 @@ For each route:
 
 #### 2C — KV namespaces
 
-- ☐ `wrangler kv namespace create LEAGUE_DATA` — replaces the LRU Redis.
+- ☑ `wrangler kv namespace create LEAGUE_DATA` — replaces the LRU Redis.
   Keys: `${year}-${type}` (e.g. `2024-overall`), `${year}-percentiles-${pctile}`.
-  TTL via the `expirationTtl` param on writes (3 days).
-- ☐ `wrangler kv namespace create SUMMARY_LAST_UPDATED` (small, but isolate
-  from the bulk data so list operations stay fast).
-- ☐ Add the bindings to `wrangler.toml`:
-  ```toml
-  [[kv_namespaces]]
-  binding = "LEAGUE_DATA"
-  id = "..."
-  ```
+  TTL via the `expirationTtl` param on writes (3 days). ID:
+  `649602a55c7048c5ba433bdece6ba731`.
+- ☑ `wrangler kv namespace create SUMMARY_LAST_UPDATED` (small, but isolate
+  from the bulk data so list operations stay fast). ID:
+  `564be97a4ca8419a9ccdc8b0be0f1c3d`.
+- ☑ Add the bindings to `wrangler.toml`. Both are wired and the
+  `Bindings` type in `worker/src/index.ts` references them so handlers
+  get type-checked KV access.
 - ☐ Migrate the recursive-fallback summary fetch to a single KV-with-fetch
   pattern: `kvCacheOr(key, ttl, () => fetchSummary(...))`.
 
