@@ -3,8 +3,11 @@
 
 import { Hono } from "hono";
 import { getGlossary } from "./lib/glossary";
+import { prepareLeaderboardRows, type LeaderboardType } from "./lib/leaderboard";
 import { CURRENT_SEASON } from "./lib/season";
+import { retrieveLastUpdated, retrieveLeagueData } from "./lib/summary";
 import { GlossaryPage } from "./templates/Glossary";
+import { LeaderboardPage } from "./templates/Leaderboard";
 
 type Bindings = {
   // KV namespaces (2C). Bulk league/team summary cache + a small
@@ -52,5 +55,28 @@ app.get("/cfb/players/:type", (c) =>
 app.get("/cfb/year/:year/players", (c) =>
   c.redirect(`/cfb/year/${c.req.param("year")}/players/passing`),
 );
+
+// First KV-using route. Pulls the season's "overall" league data from
+// LEAGUE_DATA (KV-first, summary-service fallback), filters/sorts per
+// the requested type+sort, and renders the leaderboard table.
+app.get("/cfb/year/:year/teams/:type", async (c) => {
+  const year = parseInt(c.req.param("year"), 10);
+  const type = (c.req.param("type") || "differential") as LeaderboardType;
+  const requestedSort = c.req.query("sort") || "overall.adjEpaPerPlay";
+
+  const baseData = await retrieveLeagueData(c.env.LEAGUE_DATA, year, "overall");
+  const { rows, sortKey } = prepareLeaderboardRows(baseData, type, requestedSort);
+  const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
+
+  return c.html(
+    <LeaderboardPage
+      teams={rows}
+      type={type}
+      season={year}
+      sort={sortKey}
+      lastUpdated={lastUpdated}
+    />,
+  );
+});
 
 export default app;
