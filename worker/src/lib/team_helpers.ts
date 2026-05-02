@@ -262,7 +262,7 @@ function cleanScore(comp: { score?: unknown }): number {
 }
 
 interface ScheduleStatus {
-  type?: { name?: string; completed?: boolean; detail?: string };
+  type?: { name?: string; completed?: boolean; detail?: string; id?: string | number };
   period?: number | string;
   clock?: number | string;
 }

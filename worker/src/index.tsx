@@ -1,7 +1,7 @@
 // Phase 2 worker entry. Routes are ported in the order documented in
 // docs/migration-plan.md sub-phase 2B; this file wires them up.
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { getGlossary } from "./lib/glossary";
 import {
   getPercentileKey,
@@ -10,6 +10,13 @@ import {
   type LeaderboardType,
   type PlayerLeaderboardType,
 } from "./lib/leaderboard";
+import {
+  getGames,
+  getGroups,
+  getWeeksMap,
+  hasActiveGames,
+  prepareGameList,
+} from "./lib/schedule";
 import { CURRENT_SEASON } from "./lib/season";
 import {
   retrieveLastUpdated,
@@ -22,6 +29,7 @@ import { EpaChartPage, type EpaChartTeam } from "./templates/EpaChart";
 import { GlossaryPage } from "./templates/Glossary";
 import { LeaderboardPage } from "./templates/Leaderboard";
 import { PlayerLeaderboardPage } from "./templates/PlayerLeaderboard";
+import { ScoreboardPage } from "./templates/Scoreboard";
 import { TeamPage, type TeamData } from "./templates/Team";
 import {
   TeamSeasonPage,
@@ -44,11 +52,68 @@ const app = new Hono<{ Bindings: Bindings }>();
 
 app.get("/", (c) => c.redirect("/cfb/"));
 
+app.get("/cfb/healthcheck", (c) => c.json({ status: "ok", source: "worker-scaffold" }));
+
+// Scoreboard family — three routes that render the same template
+// with different year/type/week parameters. Mirrors routes.js:310-384.
+async function renderScoreboard(
+  c: Context<{ Bindings: Bindings }>,
+  opts: {
+    year: string | number | null;
+    week: string | number | null;
+    seasontype: string | number;
+    title: string | null;
+  },
+) {
+  const groupParam = c.req.query("group");
+  const group = groupParam ?? 80;
+  const games = await getGames({
+    year: opts.year,
+    week: opts.week,
+    type: opts.seasontype,
+    group,
+  });
+  const scoreboard = prepareGameList(games);
+  return c.html(
+    <ScoreboardPage
+      scoreboard={scoreboard}
+      weekList={getWeeksMap()}
+      groups={getGroups()}
+      year={opts.year}
+      week={opts.week}
+      seasontype={opts.seasontype}
+      group={group}
+      title={opts.title}
+      hasActiveGames={hasActiveGames(scoreboard)}
+    />,
+  );
+}
+
 app.get("/cfb/", (c) =>
-  c.text("gameonpaper Worker scaffold — port in progress (see docs/migration-plan.md Phase 2)."),
+  renderScoreboard(c, { year: null, week: null, seasontype: 2, title: null }),
 );
 
-app.get("/cfb/healthcheck", (c) => c.json({ status: "ok", source: "worker-scaffold" }));
+app.get("/cfb/year/:year/type/:type/week/:week", async (c) => {
+  const year = c.req.param("year");
+  const type = c.req.param("type");
+  const week = c.req.param("week");
+  const weeks = getWeeksMap();
+  const weekTitle =
+    weeks[year]?.find(
+      (w) => parseInt(String(w.type), 10) === parseInt(type, 10) && parseInt(String(w.value), 10) === parseInt(week, 10),
+    )?.title ?? null;
+  return renderScoreboard(c, { year, week, seasontype: type, title: weekTitle });
+});
+
+app.get("/cfb/year/:year", async (c) => {
+  const year = c.req.param("year");
+  const weeks = getWeeksMap();
+  const weekTitle =
+    weeks[year]?.find(
+      (w) => parseInt(String(w.type), 10) === 2 && parseInt(String(w.value), 10) === 1,
+    )?.title ?? null;
+  return renderScoreboard(c, { year, week: 1, seasontype: 2, title: weekTitle });
+});
 
 // First real port (sub-phase 2B). Static-ish page — validates that the
 // Layout component, Hono JSX renderer, and JSON-data import path all

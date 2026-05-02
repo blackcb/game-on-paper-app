@@ -37,13 +37,16 @@ USER ACTION step without confirmation from the user.**
     * `/cfb/year/:year/charts/team/epa`
     * `/cfb/team/:teamId` (multi-season team page)
     * `/cfb/year/:year/team/:teamId` (per-season team page)
-    * + `/`, `/cfb/`, `/cfb/healthcheck` placeholders
-  - 2B routes pending: scoreboard, week scoreboards, game.
+    * `/cfb/` (today's scoreboard)
+    * `/cfb/year/:year/type/:type/week/:week` (week scoreboard)
+    * `/cfb/year/:year` (year scoreboard, defaults to type=2 week=1)
+    * + `/`, `/cfb/healthcheck` placeholders
+  - 2B routes pending: `/cfb/game/:gameId`.
   - 2D (Cache API) / 2E (assets) / 2F (cron) / 2H (cutover): not started
-  - 2G (tests): 98 vitest assertions, ~1.9 s.
+  - 2G (tests): 113 vitest assertions, ~2.1 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-02 (Phase 2B — both team views shipped)
+- Last updated: 2026-05-02 (Phase 2B — scoreboard family shipped)
 
 ## Resume hint for Claude Code
 
@@ -581,8 +584,26 @@ Port in this order (simplest first, biggest at the end):
   breakdown panels + player box scaffolding + 14 schedule thumbs
   driven by real ESPN data. Player rows are sentinel-empty until 2H,
   same as the other summary-backed routes.
-- ☐ `/cfb/` (scoreboard) — exercises ESPN scoreboard fetch + Cache API.
-- ☐ `/cfb/year/:year/type/:type/week/:week`, `/cfb/year/:year`.
+- ☑ `/cfb/`, `/cfb/year/:year/type/:type/week/:week`, `/cfb/year/:year`.
+  **Done 2026-05-02.** Three routes share one `renderScoreboard`
+  helper and one `Scoreboard.tsx` template. `/cfb/` hits ESPN's
+  site-API scoreboard endpoint; the year/week variants hit the
+  cdn.espn.com schedule endpoint and flatten its date-keyed
+  `content.schedule` shape. Schedule data layer
+  (`lib/schedule.ts`) imports `data/schedule.json` (75 KB) and
+  `data/groups.json` (2 KB) directly — wrangler bundles them.
+  `prepareGameList` does the routes.js:48-93 filter+sort
+  (negative-id drop, IN_PROGRESS > END_PERIOD > HALFTIME > others
+  with date / type-id tiebreak). `hasActiveGames` drives the
+  client-side 60-second auto-refresh. Top-25 (`group=-1`) coerces
+  to FBS at the URL and filters down post-fetch. ESPN HTML
+  responses (sometimes returned during outages) are explicitly
+  rejected as malformed. Cache API is intentionally deferred to
+  sub-phase 2D — every request hits ESPN today. `GameThumb`
+  hoisted out of TeamSeason.tsx into its own
+  `templates/GameThumb.tsx` so both pages share one definition.
+  Live deploy: `/cfb/` returns 99 game thumbs (213 KB), the year
+  variants return 100 (243 KB).
 - ☐ `/cfb/game/:gameId` — the big one. Exercises ESPN PBP fetch, Python
   service call, percentile lookup, error/quarantine handling, and the
   100KB game.ejs render.
@@ -709,21 +730,24 @@ Two options, pick one:
 
 #### Resume hint (next session)
 
-Both team views are done. Next up is the scoreboard family — start
-with `/cfb/` (today's scoreboard), then the year/week variants
-(`/cfb/year/:year/type/:type/week/:week`, `/cfb/year/:year`). These
-hit ESPN's scoreboard endpoint and reuse the `GameThumb` component
-that already lives in `templates/TeamSeason.tsx` — when porting the
-scoreboard, lift `GameThumb` out into its own `templates/GameThumb.tsx`
-so both pages can import it.
+Scoreboard family is done. The only remaining 2B route is the big
+one: `/cfb/game/:gameId`. It's the only route that calls the Python
+service, embeds the heaviest EJS template (`game.ejs` + the
+`field`/`pass_chart`/`rush_chart`/`team_card`/`team_slice`/`matchup`/
+`slim_box_score`/`pregame`/`game_error` partials), and is the right
+moment to land sub-phase 2D (Cache API) — per-game PBP is the big
+cacheable thing.
 
-The actual heavy lift after the scoreboard family is `/cfb/game/:gameId`
-— the only route that calls the Python service. That's the right
-moment to land sub-phase 2D (Cache API), since per-game PBP is the
-big cacheable thing.
+Game route's data flow on the Express side
+(`frontend/cfb/routes.js:414-554`): ESPN scoreboard probe → cache-
+first via `Games.getPBP` → if cache empty or in-progress > 30s old,
+call Python `/cfb/process` → render `pages/cfb/game` (or
+`pages/cfb/pregame` for scheduled, `pages/cfb/game_error` for the
+QUARANTINE_LIST or thrown errors). The Python URL on the worker side
+will need to be a binding (env var for now, container binding at 3B).
 
 Verification before starting: `cd worker && npx vitest run` should
-pass 98 tests in ~1.9s, `npx tsc --noEmit` clean. The token is in
+pass 113 tests in ~2.1s, `npx tsc --noEmit` clean. The token is in
 `~/.zshrc`; pull it with `eval "$(grep '^export CLOUDFLARE_API_TOKEN' ~/.zshrc)"`
 in any subprocess that needs Cloudflare access.
 
@@ -733,9 +757,15 @@ Worker file layout (as of last commit):
 worker/
   src/
     index.tsx              ← Hono routes + bindings type
+    data/
+      glossary.json        ← bundled
+      schedule.json        ← bundled (75 KB)
+      groups.json          ← bundled (2 KB)
     lib/
       glossary.ts
       leaderboard.ts       ← helpers + getPercentileKey + prepare*Rows
+      schedule.ts          ← getWeeksMap, getGroups, getGames,
+                            prepareGameList, hasActiveGames
       season.ts            ← CURRENT_SEASON, MIN_SEASON
       summary.ts           ← KV-first retrieve* helpers
       teams.ts             ← ESPN getTeamInformation + season variant
@@ -750,9 +780,12 @@ worker/
       Trends.tsx
       EpaChart.tsx
       Team.tsx             ← multi-season team page
-      TeamSeason.tsx       ← per-season team page + 5 inlined
+      TeamSeason.tsx       ← per-season team page + 4 inlined
                             partials (TeamCard, TeamPlayerCards,
-                            TeamSlice, PlayerBox, GameThumb)
+                            TeamSlice, PlayerBox)
+      GameThumb.tsx        ← schedule grid card, shared by
+                            TeamSeason + Scoreboard
+      Scoreboard.tsx       ← /cfb/, /cfb/year/:year, week scoreboard
     types/env.d.ts         ← Cloudflare.Env (KV bindings)
   test/                    ← one .test.ts per route + lib unit tests
   wrangler.toml            ← name=sports, KV bindings
