@@ -3,6 +3,7 @@
 
 import { Hono } from "hono";
 import { getGlossary } from "./lib/glossary";
+import { CURRENT_SEASON } from "./lib/season";
 import { GlossaryPage } from "./templates/Glossary";
 
 type Bindings = {
@@ -29,5 +30,27 @@ app.get("/cfb/healthcheck", (c) => c.json({ status: "ok", source: "worker-scaffo
 // Layout component, Hono JSX renderer, and JSON-data import path all
 // work end-to-end before we tackle a route that hits ESPN or KV.
 app.get("/cfb/glossary", (c) => c.html(<GlossaryPage glossary={getGlossary()} />));
+
+// Static redirects from frontend/cfb/routes.js. All 302s (Express's
+// res.redirect default and Hono's c.redirect default both 302). The
+// 2025 hardcodes mirror the Express side; track via CURRENT_SEASON so
+// the next-season bump is one constant edit.
+app.get("/cfb/teams", (c) => c.redirect(`/cfb/year/${CURRENT_SEASON}/teams/differential`));
+app.get("/cfb/teams/:type", (c) =>
+  c.redirect(`/cfb/year/${CURRENT_SEASON}/teams/${c.req.param("type")}`),
+);
+app.get("/cfb/year/:year/teams", (c) =>
+  c.redirect(`/cfb/year/${c.req.param("year")}/teams/differential`),
+);
+app.get("/cfb/charts/team/epa", (c) =>
+  c.redirect(`/cfb/year/${CURRENT_SEASON}/charts/team/epa`),
+);
+app.get("/cfb/players", (c) => c.redirect(`/cfb/year/${CURRENT_SEASON}/players/passing`));
+app.get("/cfb/players/:type", (c) =>
+  c.redirect(`/cfb/year/${CURRENT_SEASON}/players/${c.req.param("type")}`),
+);
+app.get("/cfb/year/:year/players", (c) =>
+  c.redirect(`/cfb/year/${c.req.param("year")}/players/passing`),
+);
 
 export default app;
