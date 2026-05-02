@@ -186,6 +186,16 @@ async function retrievePBP(gameId, res) {
     }
 }
 
+// Game Excitement Index: sum of absolute home-team win-probability
+// swings across all plays, normalized so an "average-length" game
+// yields a number directly comparable across games of different
+// length. The 179.0177... constant is the average plays-per-game
+// across the historical training corpus — dividing it by this game's
+// play count gives the per-play weight. Last play's WP is forced to
+// 1.0/0.0 by the caller (games.js processPlays) so the final swing
+// reflects the actual outcome rather than the model's pre-final
+// estimate. Worker port must reproduce this exactly — Vitest test
+// in Phase 2G asserts against snapshot values.
 function calculateGEI(plays, homeTeamId) {
     var wpDiffs = []
     for (var i = 0; i < plays.length; i++) {

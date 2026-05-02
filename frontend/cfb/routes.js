@@ -388,6 +388,15 @@ function cleanAbbreviation(abbrev) {
     return abbrev;
 }
 
+// Game IDs whose ESPN payload is malformed in a way that crashes the
+// sportsdataverse pipeline (missing statYardage, broken drives, etc.).
+// We short-circuit these to the game_error template instead of
+// attempting to render — every retry just costs a 5s Python pipeline
+// run that ends in the same 500. Add new entries when a specific
+// gameId reproducibly errors and the cause is upstream-data, not our
+// code. Commented-out entries are games that recovered after ESPN
+// re-published the payload; left in place as a hint for the next
+// occurrence on a similar week.
 const QUARANTINE_LIST = [
     '401411157',
     '401403861',

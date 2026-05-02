@@ -154,6 +154,13 @@ def process():
         timings["box_score"] = time.perf_counter() - t0
 
         t0 = time.perf_counter()
+        # Flat sportsdataverse intermediate columns. The reshape loop
+        # below re-nests their values into ESPN-shaped objects
+        # (record["start"], record["end"], record["modelInputs"], etc.),
+        # then we pop these from the record so the response matches the
+        # pre-pipeline ESPN shape the frontend expects. Removing one
+        # without removing its consumer in the loop will surface as a
+        # KeyError; adding one without its source column ditto.
         bad_cols = [
             "start.distance",
             "start.yardLine",
@@ -193,7 +200,15 @@ def process():
             "scoringType.name",
             "scoringType.abbreviation",
         ]
-        # clean records back into ESPN format
+        # Re-nest sportsdataverse's flat dot-keyed columns
+        # (`start.distance`, `expectedPoints.before`, ...) back into
+        # the nested objects the frontend's EJS templates expect
+        # (`record["start"]["distance"]`, `record["expectedPoints"]["before"]`).
+        # The Worker port must preserve this output shape exactly —
+        # the snapshot tests in tests/test_process_snapshot.py compare
+        # against fixtures captured from this loop. Fragile to
+        # sportsdataverse column renames; if a key disappears here, the
+        # snapshot test fails and you regenerate the fixture.
         for record in jsonified_df:
             record["clock"] = {
                 "displayValue": record["clock.displayValue"],
