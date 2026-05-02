@@ -16,10 +16,14 @@ USER ACTION step without confirmation from the user.**
   - Upstream: **staged in 4 topic branches locally** (`pr-a-latent-bug-fixes`,
     `pr-b-caching-wins`, `pr-c-python-compression`, `pr-d-asset-cleanup`);
     not yet pushed or PR'd pending replica burn-in
-- **Phase 2 — Worker rewrite + KV + Pages (Tier 2)**: not started
+- **Phase 2 — Worker rewrite + KV + Pages (Tier 2)**:
+  - 2A scaffolding: **completed 2026-05-02** (Hono + TS + Wrangler);
+    `worker/` directory live, `wrangler dev` smoke-tested locally.
+    Remaining USER ACTION: Cloudflare API token for `wrangler deploy`.
+  - 2B–2H: not started
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-01
+- Last updated: 2026-05-02
 
 ## Resume hint for Claude Code
 
@@ -453,22 +457,23 @@ balancer or a single DNS edit.
 
 #### 2A — Scaffolding
 
-- ☐ Decide on framework. Recommendation: **Hono** (Express-like, designed
+- ☑ Decide on framework. Recommendation: **Hono** (Express-like, designed
   for Workers). Alternatives: itty-router (smaller), plain Workers
   (no router). Document the choice in Notes.
-- ☐ Create `worker/` directory at repo root with
+- ☑ Create `worker/` directory at repo root with
   `package.json`, `wrangler.toml`, `tsconfig.json`, `src/index.ts`. Use
   TypeScript — the EJS files contain enough untyped data shaping to make
   TS payback fast.
-- ☐ `cd worker && npm i hono`. Dev tools: `npm i -D wrangler typescript
+- ☑ `cd worker && npm i hono`. Dev tools: `npm i -D wrangler typescript
   @cloudflare/workers-types vitest @cloudflare/vitest-pool-workers`.
-  > **USER ACTION**: Create a Cloudflare API token (Account → API Tokens
-  > → Create → "Edit Cloudflare Workers" template). Save as a
-  > `CLOUDFLARE_API_TOKEN` GitHub secret and a local `~/.wrangler/config`
-  > entry.
-- ☐ Configure `wrangler.toml` with `name = "gameonpaper"`, `main =
-  "src/index.ts"`, `compatibility_date`. Add `nodejs_compat` flag (some
-  npm packages assume Node built-ins).
+  > **USER ACTION** *(still pending)*: Create a Cloudflare API token
+  > (Account → API Tokens → Create → "Edit Cloudflare Workers" template).
+  > Save as a `CLOUDFLARE_API_TOKEN` GitHub secret and a local
+  > `~/.wrangler/config` entry. Not blocking for 2B (can port routes and
+  > run locally with `wrangler dev`); blocks `wrangler deploy`.
+- ☑ Configure `wrangler.toml` with `name = "gameonpaper-experiment"`,
+  `main = "src/index.ts"`, `compatibility_date = "2026-05-02"`. Added
+  `nodejs_compat` flag (some npm packages assume Node built-ins).
 
 #### 2B — Port routes incrementally
 
@@ -625,8 +630,39 @@ Two options, pick one:
 
 ### Notes
 
-_(fill in as you go: framework chosen, KV namespace IDs, asset strategy,
-preview URLs used for testing, rollback events if any, before/after metrics)_
+#### 2A scaffolding (2026-05-02)
+
+**Framework: Hono** (`hono@^4.12`).
+- Express-like API → least friction porting from `frontend/cfb/routes.js`'s
+  `router.route(...).get(...)` shape.
+- TS-first; built-in JSX support means we can compile EJS templates to
+  Hono JSX components without bringing in a separate template engine.
+- Mature on Workers (used by Cloudflare's own examples), much smaller
+  than itty-router's plain-Workers alternative once you add a router
+  back, and it has first-class testing via `@cloudflare/vitest-pool-workers`.
+- Trade-off accepted: ships a small-but-nonzero runtime (~13 KB
+  gzipped); itty-router is ~1 KB. Not material at this size of app.
+
+**Worker name: `gameonpaper-experiment`**.
+- Aligns with the fork's GHCR image namespace (`game-on-paper-experiment`).
+- Avoids colliding with the eventual upstream Worker if the maintainer
+  later adopts this approach with `gameonpaper`.
+- The *.workers.dev preview URL becomes `gameonpaper-experiment.<acct>.workers.dev`.
+
+**Toolchain**: `wrangler@4.87`, `typescript@6`, `@cloudflare/workers-types@4.20260502`,
+`vitest@4`, `@cloudflare/vitest-pool-workers@0.15`. `compatibility_date`
+pinned to today (`2026-05-02`) with `nodejs_compat` flag on.
+
+**Verified locally**: `wrangler dev --local --port 8787` boots, tsc
+typechecks clean, three placeholder routes (`/` redirect, `/cfb/`,
+`/cfb/healthcheck`) return correctly. Real route ports start in 2B.
+
+**Files**:
+- `worker/package.json` — scripts: `dev`, `deploy`, `typecheck`, `test`.
+- `worker/wrangler.toml` — name, main, compat date, nodejs_compat.
+- `worker/tsconfig.json` — strict, ES2022, JSX via Hono.
+- `worker/src/index.ts` — placeholder Hono app.
+- `worker/.gitignore` — `node_modules`, `.wrangler`, `dist`, `.dev.vars`.
 
 ---
 

@@ -1,0 +1,23 @@
+# Cloudflare Worker config for the Phase 2 rewrite of the Express+EJS
+# frontend. Bindings (KV namespaces, container, secrets) get added as
+# we port routes — this is intentionally minimal for sub-phase 2A.
+#
+# Name is `gameonpaper-experiment` to align with the fork's GHCR image
+# namespace and avoid colliding with the eventual upstream worker.
+# Rename via `wrangler.toml` + a corresponding rename in the dashboard
+# if that lands.
+name = "gameonpaper-experiment"
+main = "src/index.ts"
+# 2026-05-02: today's date. Bumping this opts into newer Workers
+# runtime semantics; do it deliberately, not as a refactor side effect.
+compatibility_date = "2026-05-02"
+# Required by some npm packages (axios used Node built-ins; the port
+# replaces axios with fetch but the flag is cheap to keep on for any
+# helper that still touches a Node-only API).
+compatibility_flags = ["nodejs_compat"]
+
+# Local dev defaults. `wrangler dev` listens on 8787 by default; pin
+# it so the Playwright suite (perf-plan Day 3) can target a known
+# port without env wiring.
+[dev]
+port = 8787
