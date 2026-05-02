@@ -17,22 +17,31 @@ USER ACTION step without confirmation from the user.**
     `pr-b-caching-wins`, `pr-c-python-compression`, `pr-d-asset-cleanup`);
     not yet pushed or PR'd pending replica burn-in
 - **Phase 2 — Worker rewrite + KV + Pages (Tier 2)**:
-  - 2A scaffolding: **completed 2026-05-02** (Hono + TS + Wrangler);
-    `worker/` directory live, `wrangler dev` smoke-tested locally.
-  - 2C KV namespaces + summary data layer: **completed 2026-05-02**
-    (`LEAGUE_DATA`, `SUMMARY_LAST_UPDATED` provisioned; KV-first
-    `retrieveLeagueData` / `retrieveLastUpdated` ported with retry-cap
-    + MIN_SEASON floor).
-  - First smoke deploy: **2026-05-02** at
-    https://sports.unseen-university.workers.dev (worker name `sports`,
-    account subdomain `unseen-university`). All four ported routes
-    return correctly; non-ported paths and `/assets/*` 404 as expected.
-  - 2B (route porting in progress: glossary + 7 redirects done)
+  - 2A scaffolding: **completed 2026-05-02** (Hono + TS + Wrangler).
+  - 2C data layer: **completed 2026-05-02**. Two KV namespaces
+    provisioned (`LEAGUE_DATA` `649602a5...0ba731`,
+    `SUMMARY_LAST_UPDATED` `564be97a...0f1c3d`). KV-first helpers:
+    `retrieveLeagueData`, `retrieveLastUpdated`, `retrievePercentiles`,
+    `retrieveTeamData` — all with summary-service fallback +
+    write-through, recursive year-1 retry capped at 2, MIN_SEASON
+    floor. ESPN integration via `lib/teams.ts` (`getTeamInformation`,
+    `getTeamSeasonInformation`).
+  - 2B routes ported (live at https://sports.unseen-university.workers.dev):
+    * `/cfb/glossary`
+    * 7 static redirects (`/cfb/teams`, `/cfb/teams/:type`,
+      `/cfb/year/:year/teams`, `/cfb/charts/team/epa`, `/cfb/players`,
+      `/cfb/players/:type`, `/cfb/year/:year/players`)
+    * `/cfb/year/:year/teams/:type` (team leaderboard)
+    * `/cfb/year/:year/players/:type` (player leaderboard)
+    * `/cfb/charts/trends`
+    * `/cfb/year/:year/charts/team/epa`
+    * + `/`, `/cfb/`, `/cfb/healthcheck` placeholders
+  - 2B routes pending: team views, scoreboard, week scoreboards, game.
   - 2D (Cache API) / 2E (assets) / 2F (cron) / 2H (cutover): not started
-  - 2G (tests): scaffolded; 20 vitest assertions green.
+  - 2G (tests): 67 vitest assertions, ~1.6 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-02
+- Last updated: 2026-05-02 (Phase 2B mid-stream)
 
 ## Resume hint for Claude Code
 
@@ -661,6 +670,50 @@ Two options, pick one:
   except for the Python service (handled in Phase 3).
 
 ### Notes
+
+#### Resume hint (next session)
+
+Pick up at sub-phase 2B with the team views — the data layer is
+already in place (`lib/teams.ts`, `retrieveTeamData`). Two paths:
+
+- **Team views** (next on the plan order): port `/cfb/team/:teamId`
+  (`team.ejs` ~282 lines, only needs `logos` partial — start here)
+  then `/cfb/year/:year/team/:teamId` (`team_season.ejs` ~417 lines
+  + 5 partials totaling ~700 more lines, sized as a separate commit).
+- **Skip ahead to the scoreboard**: `/cfb/` is the next ESPN-fetching
+  route (uses ESPN's scoreboard endpoint), simpler shape than team
+  views. Acceptable detour if context budget for the team_season
+  port is unavailable.
+
+Verification before starting: `cd worker && npx vitest run` should
+pass 67 tests in ~1.6s, `npx tsc --noEmit` clean. The token is in
+`~/.zshrc`; pull it with `eval "$(grep '^export CLOUDFLARE_API_TOKEN' ~/.zshrc)"`
+in any subprocess that needs Cloudflare access.
+
+Worker file layout (as of last commit):
+
+```
+worker/
+  src/
+    index.tsx              ← Hono routes + bindings type
+    lib/
+      glossary.ts
+      leaderboard.ts       ← helpers + getPercentileKey + prepare*Rows
+      season.ts            ← CURRENT_SEASON, MIN_SEASON
+      summary.ts           ← KV-first retrieve* helpers
+      teams.ts             ← ESPN getTeamInformation + season variant
+    templates/
+      Layout.tsx           ← shared chrome (head/nav/footer/scripts)
+      Glossary.tsx
+      Leaderboard.tsx
+      PlayerLeaderboard.tsx
+      Trends.tsx
+      EpaChart.tsx
+    types/env.d.ts         ← Cloudflare.Env (KV bindings)
+  test/                    ← one .test.ts per route + lib unit tests
+  wrangler.toml            ← name=sports, KV bindings
+  vitest.config.mts        ← cloudflareTest plugin (Vitest 4)
+```
 
 #### 2A scaffolding (2026-05-02)
 
