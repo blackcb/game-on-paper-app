@@ -520,7 +520,15 @@ Port in this order (simplest first, biggest at the end):
   including the per-team dark-mode logo `<style>` block. Live deploy
   renders the chrome but empty `<tbody>` (internal `summary:3000` URL
   isn't reachable from CF edge); real data flows in at sub-phase 2H.
-- ☐ `/cfb/year/:year/players/:type` (player leaderboard).
+- ☑ `/cfb/year/:year/players/:type` (player leaderboard). **Done 2026-05-02.**
+  Reuses the helpers (`roundNumber`, `cleanRank`, `generateColorRampValue`,
+  `cleanField`, `retrieveValue`) from the team leaderboard. Adds
+  `preparePlayerRows` (no asc-flip, no fallback rules), `playerLeaderTitle`,
+  and `playerStatMinimum` (the qualifying-thresholds disclaimer). Three
+  type-specific column sets (passing/rushing/receiving) inline in
+  `PlayerLeaderboard.tsx`. Receiving caveat note conditionally rendered.
+  Live deploy `/cfb/year/2024/players/passing` returns 200 with title
+  + qualifying threshold; empty `<tbody>` until KV gets seeded.
 - ☐ `/cfb/charts/trends`, `/cfb/year/:year/charts/team/epa`.
 - ☐ `/cfb/team/:teamId`, `/cfb/year/:year/team/:teamId`.
 - ☐ `/cfb/` (scoreboard) — exercises ESPN scoreboard fetch + Cache API.

@@ -29,7 +29,9 @@ export function generateMarginalString(
   input: unknown,
   power10: number,
   fixed: number,
-  type: LeaderboardType,
+  // String to allow both team-leaderboard ("differential" matters) and
+  // player-leaderboard (type is never "differential"; check is a no-op).
+  type: string,
 ): string {
   if (input == null) return "N/A";
   // Only the differential view prefixes positives with "+". The
@@ -96,6 +98,48 @@ export function leaderTitle(type: LeaderboardType | string): string {
   if (type === "offensive") return "Offensive Statistics";
   if (type === "defensive") return "Defensive Statistics";
   return type;
+}
+
+export type PlayerLeaderboardType = "passing" | "rushing" | "receiving";
+
+// Player leaderboard's filter+sort. Routes.js:845-876. Simpler than
+// the team version: no asc-flip (always descending), no
+// type-collapses-to-overall fallback, no adjEpaPerPlay exception. Drop
+// rows with null/NA value or rank, then sort by the requested key.
+export function preparePlayerRows(
+  baseData: TeamLeagueRow[],
+  sortKey: string,
+): TeamLeagueRow[] {
+  const filtered = baseData.filter((p) => {
+    const value = retrieveValue(p, sortKey);
+    const rank = retrieveValue(p, `${sortKey}Rank`);
+    return value != null && value !== "NA" && rank != null && rank !== "NA";
+  });
+  filtered.sort(
+    (a, b) =>
+      parseFloat(String(retrieveValue(b, sortKey))) -
+      parseFloat(String(retrieveValue(a, sortKey))),
+  );
+  return filtered;
+}
+
+export function playerLeaderTitle(type: PlayerLeaderboardType | string): string {
+  if (type === "passing") return "Passing Statistics";
+  if (type === "rushing") return "Rushing Statistics";
+  if (type === "receiving") return "Receiving Statistics";
+  return type;
+}
+
+// "min. X dropbacks/carries/targets per team-game" disclaimer suffix
+// from player_leaderboard.ejs:71-84. Embeds an HTML link, so the
+// caller must render it via dangerouslySetInnerHTML.
+export function playerStatMinimum(type: PlayerLeaderboardType | string): string {
+  const tail =
+    " (adapted from <a href='https://www.pro-football-reference.com/about/minimums.htm'>Pro Football Reference</a>).";
+  if (type === "passing") return `min. 14 dropbacks per team-game${tail}`;
+  if (type === "rushing") return `min. 6.25 carries per team-game${tail}`;
+  if (type === "receiving") return `min. 1.875 targets per team-game${tail}`;
+  return "";
 }
 
 // Server-side sort+filter logic from routes.js:788-843. Mirrors the

@@ -3,11 +3,17 @@
 
 import { Hono } from "hono";
 import { getGlossary } from "./lib/glossary";
-import { prepareLeaderboardRows, type LeaderboardType } from "./lib/leaderboard";
+import {
+  preparePlayerRows,
+  prepareLeaderboardRows,
+  type LeaderboardType,
+  type PlayerLeaderboardType,
+} from "./lib/leaderboard";
 import { CURRENT_SEASON } from "./lib/season";
 import { retrieveLastUpdated, retrieveLeagueData } from "./lib/summary";
 import { GlossaryPage } from "./templates/Glossary";
 import { LeaderboardPage } from "./templates/Leaderboard";
+import { PlayerLeaderboardPage } from "./templates/PlayerLeaderboard";
 
 type Bindings = {
   // KV namespaces (2C). Bulk league/team summary cache + a small
@@ -71,6 +77,29 @@ app.get("/cfb/year/:year/teams/:type", async (c) => {
   return c.html(
     <LeaderboardPage
       teams={rows}
+      type={type}
+      season={year}
+      sort={sortKey}
+      lastUpdated={lastUpdated}
+    />,
+  );
+});
+
+// Player leaderboard. Same KV-first → summary-fallback shape as the
+// team leaderboard, but the data is shaped per-player (no t[type]
+// projection step) and sort is always descending.
+app.get("/cfb/year/:year/players/:type", async (c) => {
+  const year = parseInt(c.req.param("year"), 10);
+  const type = (c.req.param("type") || "passing") as PlayerLeaderboardType;
+  const sortKey = c.req.query("sort") || "advanced.epaPerPlay";
+
+  const baseData = await retrieveLeagueData(c.env.LEAGUE_DATA, year, type);
+  const rows = preparePlayerRows(baseData, sortKey);
+  const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
+
+  return c.html(
+    <PlayerLeaderboardPage
+      players={rows}
       type={type}
       season={year}
       sort={sortKey}
