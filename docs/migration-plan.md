@@ -68,37 +68,50 @@ USER ACTION step without confirmation from the user.**
     binding. WP/EP/field charts now resolve their script tags
     against the deployed Worker. Hashed-filename + 1-year
     `/assets/*` cache rule deferred to a follow-on cleanup pass.
-  - 2F (cron) / 2H (cutover): not started
-  - 2G (tests): 128 vitest assertions, ~2.7 s.
+  - 2F (cron): **completed 2026-05-03**. Cron registered
+    (`schedule: * * * * *`); `scheduled` handler in
+    `index.tsx` calls `writeCurrentScoreboard` during football
+    season (Aug 20 – Jan 20) and short-circuits otherwise.
+    Bare `/cfb/` route reads from `cfb-scoreboard-80` KV first
+    with ESPN fallback + write-through. Production smoke
+    confirmed KV warming via the route (479 KB scoreboard
+    payload cached on first hit; subsequent hits ~170 ms with
+    no ESPN call).
+  - 2H (cutover): not started
+  - 2G (tests): 135 vitest assertions, ~3.8 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-03 (Phase 2E — Workers Static Assets
-  binding completed; `/assets/*` now serves from the Worker)
+- Last updated: 2026-05-03 (Phase 2F — cron-warmed scoreboard
+  completed; the `/cfb/` route now reads from KV first)
 
 ### Next session entry point
 
 Late-day stop on 2026-05-03. Branch `instrument-plus-cloudflare-cdn`,
-three commits ahead of the prior checkpoint: 2B full template port
-(`6f14837`), 2D Cache API (`4dda877`), and 2E static assets.
-Working tree clean once 2E is committed.
+four commits ahead of the prior checkpoint: 2B full template port
+(`6f14837`), 2D Cache API (`4dda877`), 2E static assets
+(`aa5f1bb`), and 2F cron-warmed scoreboard. Working tree clean
+once 2F is committed.
 
-**Phase 2E is complete.** Pick up at sub-phase **2F — Cron-warmed
-scoreboard**. Add a `[triggers] crons = ["* * * * *"]` to
-`wrangler.toml`, implement a `scheduled` handler that fetches the
-ESPN scoreboard and writes to KV with key `cfb-scoreboard`, and
-make the user-facing `/cfb/` route read from KV first. Optional:
-season-window guard (skip cron Aug 20 – Jan 20).
+**Phase 2F is complete.** What's left in Phase 2:
+- **2G (tests + observability)**: 135 vitest tests passing
+  (covers all of 2B/2D/2E/2F), but the perf-plan Day 1
+  Server-Timing carry-forward, structured JSON logging, and
+  Schema validator porting are still pending. Could be picked
+  up next.
+- **2H (parallel deploy + DNS cutover)**: the destructive step
+  that flips `gameonpaper.com` (or the replica) DNS to the
+  Worker. Blocked on the Python proxy gap — `PYTHON_BASE_URL`
+  points at the Docker-internal `http://python:7000` and won't
+  resolve from CF edge. Resolved either by (a) swapping in a
+  publicly-reachable Python URL on the droplet or (b) moving
+  Python into a Cloudflare Container per Phase 3B.
 
-After 2F: 2H (parallel deploy + DNS cutover) is the natural next
-step — the only remaining gap is the Python proxy (`PYTHON_BASE_URL`
-points at the Docker-internal `http://python:7000` and won't
-resolve from CF edge). Cutover plan resolves this either by (a)
-swapping in a publicly-reachable Python URL on the droplet or (b)
-moving Python into a Cloudflare Container per Phase 3B.
-
-The hashed-filename cleanup + Phase 0 cache-rule bump from 2E is
-deferred but recommended before 2H so cutover lands with browser
-caching tuned.
+Recommended next step: tackle **2G (Server-Timing + structured
+logging)** — it's pure additive work, doesn't depend on Python
+reachability, and gives us observability into the cron's
+behavior in production. The hashed-filename cleanup + Phase 0
+cache-rule bump from 2E is also deferred; both are nice-to-have
+before 2H so cutover lands with browser caching tuned.
 
 Sanity before starting:
 ```
@@ -791,17 +804,28 @@ Pages and avoids a second deploy artifact.
 
 #### 2F — Cron-warmed scoreboard
 
-- ☐ Add a Cron Trigger to `wrangler.toml`:
-  ```toml
-  [triggers]
-  crons = ["* * * * *"]
-  ```
-  (every minute; tune down to 30s if needed via two crons offset).
-- ☐ In the Worker `scheduled` handler, fetch the ESPN scoreboard and write
-  it to KV with key `cfb-scoreboard`. The user-facing `/cfb/` route reads
-  from KV first, only falls back to a live fetch if KV is empty.
-- ☐ Consider a window guard: only run the cron during football season
+- ☑ Add a Cron Trigger to `wrangler.toml`. **Done 2026-05-03.**
+  `[triggers] crons = ["* * * * *"]` — fires every minute.
+  `wrangler deploy` confirms `schedule: * * * * *` registered.
+- ☑ In the Worker `scheduled` handler, fetch the ESPN scoreboard and write
+  it to KV. The user-facing `/cfb/` route reads from KV first, only falls
+  back to a live fetch if KV is empty. **Done 2026-05-03.** Key
+  is `cfb-scoreboard-80` (suffixed with the FBS group id; only
+  the default group is cron-warmed). 3-minute KV TTL covers ~2
+  missed cron runs before the cache goes cold and the route
+  falls back to ESPN. New helpers in `lib/schedule.ts`:
+  `writeCurrentScoreboard` (cron entry point) and
+  `getCachedCurrentScoreboard` (route entry point with
+  cache-then-fallback + write-through). The route only uses the
+  cache for the bare `/cfb/` case (year+week null, group=80);
+  other shapes (`/cfb/?group=-1` Top-25, `/cfb/?group=82` FCS,
+  the `/cfb/year/...` historical routes) live-fetch as before.
+- ☑ Consider a window guard: only run the cron during football season
   (`now >= Aug 20 && now <= Jan 20`) to save executions.
+  **Done 2026-05-03.** `isFootballSeason(date)` exported from
+  `lib/schedule.ts`; the `scheduled` handler short-circuits with
+  a single log line outside the window. Saves roughly 200k cron
+  executions/year.
 
 #### 2G — Tests + observability
 
@@ -1108,6 +1132,91 @@ Notes:
 
 **Resume hint**: pick up at sub-phase **2F — Cron-warmed
 scoreboard**.
+
+#### 2F Cron-warmed scoreboard (2026-05-03)
+
+Adds a `scheduled` handler in `src/index.tsx` that runs every
+minute via `[triggers] crons = ["* * * * *"]`. The handler
+short-circuits outside football season (Aug 20 – Jan 20), so the
+in-season cost is roughly 5 months × 30d × 24h × 60min ≈ 215k
+executions/year (well within the Workers Paid plan's allowance).
+
+Scope is narrow on purpose:
+
+- Only the bare `/cfb/` case (year=null, week=null, default
+  group=80) reads from the cron-warmed cache.
+- Other shapes — `/cfb/?group=-1` (Top-25), `/cfb/?group=82`
+  (FCS), the `/cfb/year/...` historical routes — bypass the
+  cache and live-fetch via `getGames` as before. The Top-25
+  filter is applied post-fetch on the same FBS payload, so in
+  principle those calls could share the warmed cache; saved for
+  a follow-up if traffic justifies it.
+
+New helpers in `lib/schedule.ts`:
+
+- `writeCurrentScoreboard(kv)` — fetches ESPN
+  `site.api.espn.com/.../scoreboard?groups=80` and writes the
+  events array to KV at `cfb-scoreboard-80` with a 3-minute
+  `expirationTtl`. The cron handler is the only caller.
+- `getCachedCurrentScoreboard(kv)` — KV-first reader with ESPN
+  fallback + best-effort write-through. The route handler is
+  the only caller.
+- `isFootballSeason(now?)` — UTC date check for Aug 20+ or
+  Jan 1–20. Pure function, exported for the scheduled handler
+  to gate work and for tests.
+
+Wrangler entry refactored:
+
+```ts
+// before:
+export default app;
+
+// after:
+export default {
+  fetch: app.fetch,
+  async scheduled(_event, env, ctx) { ... },
+};
+```
+
+Cron failures don't take down the cache: KV writes go through
+`ctx.waitUntil`, so the `scheduled` handler returns synchronously
+and any error is logged via the catch in the chain. The previous
+KV value remains valid until its 3-minute TTL expires.
+
+Production smoke (`sports.unseen-university.workers.dev`):
+
+- `wrangler deploy` shows `schedule: * * * * *` registered.
+- `curl -sI /cfb/` returns 200; the route's write-through
+  populated `cfb-scoreboard-80` with a 479 KB scoreboard
+  payload on the first hit.
+- Subsequent `/cfb/` curls take ~170 ms and produce no
+  ESPN call (ESPN call is ~400 ms on its own); the headline
+  steady-state win is roughly 230 ms saved per `/cfb/` hit
+  during football season.
+- Today is May 3 (off-season), so the cron itself is registered
+  but won't fire `writeCurrentScoreboard` until Aug 20.
+  `isFootballSeason(now)` returning false is logged as
+  `"scoreboard cron: off-season, skipping"` on every minute
+  tick. Re-verify in August that the cron starts firing.
+
+Tests added (135 total, +7 from the prior 128):
+
+- `isFootballSeason` boundary tests (Aug 19 / Aug 20 / Jan 20 /
+  Jan 21 + a few off-season points).
+- `writeCurrentScoreboard` writes to KV, propagates ESPN errors.
+- `getCachedCurrentScoreboard` serves from KV when warm,
+  falls through to ESPN with write-through on miss.
+- `clearScoreboardKv` `beforeEach` added to the existing
+  `/cfb/` route tests so the new write-through doesn't bleed
+  between test cases.
+
+**Resume hint**: pick up at sub-phase **2G — tests + observability**.
+135 vitest assertions already cover the route logic; the still-open
+2G tasks are the perf-plan Day 1 carry-forward (Server-Timing
+headers on every Worker response, structured JSON logging,
+Schema validator porting). After 2G, only sub-phase 2H (cutover)
+remains in Phase 2 — and that's gated on the Python proxy gap
+resolving via 3B Container or a public Python URL on the droplet.
 
 #### 2A scaffolding (2026-05-02)
 

@@ -18,12 +18,16 @@ import {
   type ProcessedGameData,
 } from "./lib/games";
 import {
+  getCachedCurrentScoreboard,
   getGames,
   getGroups,
   getWeeksMap,
   hasActiveGames,
+  isFootballSeason,
   prepareGameList,
+  writeCurrentScoreboard,
 } from "./lib/schedule";
+import type { ScheduleEvent } from "./lib/team_helpers";
 import { CURRENT_SEASON, MIN_SEASON } from "./lib/season";
 import {
   retrieveLastUpdated,
@@ -74,6 +78,11 @@ app.get("/cfb/healthcheck", (c) => c.json({ status: "ok", source: "worker-scaffo
 
 // Scoreboard family — three routes that render the same template
 // with different year/type/week parameters. Mirrors routes.js:310-384.
+//
+// The bare /cfb/ case (year=null, week=null, default group) reads
+// from the cron-warmed `cfb-scoreboard-80` KV key first. Other
+// shapes (group=-1 Top-25, group=82 FCS, year/week historical) hit
+// ESPN directly — those aren't cron-warmed.
 async function renderScoreboard(
   c: Context<{ Bindings: Bindings }>,
   opts: {
@@ -85,12 +94,21 @@ async function renderScoreboard(
 ) {
   const groupParam = c.req.query("group");
   const group = groupParam ?? 80;
-  const games = await getGames({
-    year: opts.year,
-    week: opts.week,
-    type: opts.seasontype,
-    group,
-  });
+  const isDefaultCurrent =
+    opts.year == null &&
+    opts.week == null &&
+    parseInt(String(group), 10) === 80;
+  let games: ScheduleEvent[];
+  if (isDefaultCurrent) {
+    games = await getCachedCurrentScoreboard(c.env.LEAGUE_DATA);
+  } else {
+    games = await getGames({
+      year: opts.year,
+      week: opts.week,
+      type: opts.seasontype,
+      group,
+    });
+  }
   const scoreboard = prepareGameList(games);
   return c.html(
     <ScoreboardPage
@@ -592,4 +610,38 @@ app.get("/cfb/year/:year/players/:type", async (c) => {
   );
 });
 
-export default app;
+// Sub-phase 2F: cron-warmed scoreboard.
+//
+// Wrangler's [triggers] crons = ["* * * * *"] fires this once a
+// minute. Outside football season (Aug 20 – Jan 20) the handler
+// short-circuits without touching ESPN — saves ~200k cron
+// executions/year and avoids hammering ESPN's scoreboard endpoint
+// with effectively-empty payloads in the off-season.
+//
+// On a Cron failure (ESPN timeout, fetch error, KV write error)
+// the previous KV value remains valid until its 3-min TTL
+// expires; the next-minute cron retries. After ~3 minutes of
+// continuous failures the cache goes cold and the / route
+// transparently falls through to a live ESPN fetch.
+async function scheduled(
+  _event: ScheduledController,
+  env: Bindings,
+  ctx: ExecutionContext,
+): Promise<void> {
+  if (!isFootballSeason()) {
+    console.log("scoreboard cron: off-season, skipping");
+    return;
+  }
+  ctx.waitUntil(
+    writeCurrentScoreboard(env.LEAGUE_DATA)
+      .then((count) => console.log(`scoreboard cron: wrote ${count} games to KV`))
+      .catch((err) => console.log(`scoreboard cron failed: ${(err as Error).message}`)),
+  );
+}
+
+// Hono needs an explicit object export to expose both fetch and
+// scheduled — `export default app` only exposes fetch.
+export default {
+  fetch: app.fetch,
+  scheduled,
+};

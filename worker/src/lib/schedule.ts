@@ -51,8 +51,7 @@ export function getGroups(): GroupEntry[] {
 
 // Mirrors schedule.js:75-110 (current scoreboard branch). When year
 // or week is null, fall through to ESPN's site-API scoreboard
-// endpoint, which is what /cfb/ uses. Caching (Cache API) is
-// reserved for sub-phase 2D — for now this hits ESPN every request.
+// endpoint, which is what /cfb/ uses.
 async function fetchCurrentScoreboard(group: number | string): Promise<ScheduleEvent[]> {
   const espnGroup = parseInt(String(group), 10) < 0 ? 80 : group;
   const url = `https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=${espnGroup}&size=100000`;
@@ -62,6 +61,76 @@ async function fetchCurrentScoreboard(group: number | string): Promise<ScheduleE
   }
   const data = (await res.json()) as { events?: ScheduleEvent[] };
   return data.events ?? [];
+}
+
+// Sub-phase 2F: cron-warmed scoreboard.
+//
+// The scheduled() handler calls writeCurrentScoreboard once a minute
+// during football season (see isFootballSeason); the / route calls
+// getCachedCurrentScoreboard, which reads from KV first and falls
+// back to a live ESPN fetch on miss (off-season, KV cold-start, or
+// after the cron has been failing for >SCOREBOARD_KV_TTL_SECONDS).
+//
+// Scope is narrow on purpose: only group=80 (full FBS) gets warmed.
+// group=-1 (Top-25) and any other group bypass the cache; the
+// Top-25 filter is applied post-fetch so it could in principle
+// share the FBS payload, but the simpler design is to live-fetch
+// non-default groups and revisit if traffic patterns warrant.
+const SCOREBOARD_KV_KEY = "cfb-scoreboard-80";
+
+// 3 minutes — covers ~2 missed cron runs before the cache goes
+// cold and the route falls back to ESPN. Cron itself is every
+// minute, so the steady-state TTL refresh keeps this warm.
+const SCOREBOARD_KV_TTL_SECONDS = 180;
+
+export async function writeCurrentScoreboard(kv: KVNamespace): Promise<number> {
+  const games = await fetchCurrentScoreboard(80);
+  await kv.put(SCOREBOARD_KV_KEY, JSON.stringify(games), {
+    expirationTtl: SCOREBOARD_KV_TTL_SECONDS,
+  });
+  return games.length;
+}
+
+// KV-first reader for the / route. Only the default FBS scoreboard
+// is cached; other groups fall through to a live fetch via
+// getGames in the route handler.
+export async function getCachedCurrentScoreboard(
+  kv: KVNamespace,
+): Promise<ScheduleEvent[]> {
+  const cached = await kv.get(SCOREBOARD_KV_KEY);
+  if (cached) {
+    try {
+      return JSON.parse(cached) as ScheduleEvent[];
+    } catch {
+      // bad JSON in KV — fall through to a live fetch.
+    }
+  }
+  const games = await fetchCurrentScoreboard(80);
+  // Best-effort write-through; don't block the request if KV is
+  // unavailable.
+  try {
+    await kv.put(SCOREBOARD_KV_KEY, JSON.stringify(games), {
+      expirationTtl: SCOREBOARD_KV_TTL_SECONDS,
+    });
+  } catch (err) {
+    console.log(`KV write-through failed for ${SCOREBOARD_KV_KEY}: ${(err as Error).message}`);
+  }
+  return games;
+}
+
+// Football season window. Aug 20 → Jan 20 covers preseason
+// scheduling pulls through the CFP final. Outside this window the
+// cron skips the ESPN call entirely (ESPN's cfb scoreboard
+// endpoint returns yesterday's data anyway, so warming it would
+// just thrash KV).
+export function isFootballSeason(now: Date = new Date()): boolean {
+  const month = now.getUTCMonth(); // 0-indexed
+  const day = now.getUTCDate();
+  // Aug 20+ (month=7, day>=20) through Dec
+  if (month > 7 || (month === 7 && day >= 20)) return true;
+  // Jan 1 – Jan 20 (month=0, day<=20)
+  if (month === 0 && day <= 20) return true;
+  return false;
 }
 
 // Mirrors schedule.js:111-168 (year/week branch). Calls the cdn.espn

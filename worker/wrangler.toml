@@ -25,6 +25,20 @@ compatibility_flags = ["nodejs_compat"]
 [dev]
 port = 8787
 
+# Sub-phase 2F: Cron-warmed scoreboard. Fires the `scheduled`
+# handler in src/index.tsx once a minute. The handler itself
+# checks `isFootballSeason()` and short-circuits in the off-season,
+# so the wall-clock cron rate is always once-a-minute but the
+# in-season cost is roughly 5 months × 30d × 24h × 60min ≈ 215k
+# executions/year (well within the Workers Paid plan's allowance).
+#
+# Tune to ["*/2 * * * *"] (every 2 minutes) if cron quota becomes
+# a concern. The KV key has a 3-minute TTL so a 2-minute cadence
+# still keeps the cache warm; it just gives less margin against
+# cron failures.
+[triggers]
+crons = ["* * * * *"]
+
 # Sub-phase 2E: Workers Static Assets binding. Files in ./public are
 # served at their relative paths (e.g. ./public/assets/js/dashboard.js
 # → /assets/js/dashboard.js). Default routing matches assets first and

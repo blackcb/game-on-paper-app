@@ -1,16 +1,26 @@
-import { SELF } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { env, SELF } from "cloudflare:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getCachedCurrentScoreboard,
   getGroups,
   getWeeksMap,
   hasActiveGames,
+  isFootballSeason,
   prepareGameList,
+  writeCurrentScoreboard,
 } from "../src/lib/schedule";
 import type { ScheduleEvent } from "../src/lib/team_helpers";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+// Sub-phase 2F: the / route now reads from KV first. Clear that
+// key between tests so a prior test's write doesn't bleed into
+// the next test's "No games scheduled" / spy assertions.
+async function clearScoreboardKv() {
+  await env.LEAGUE_DATA.delete("cfb-scoreboard-80");
+}
 
 const jsonResponse = (body: unknown, init: ResponseInit = {}) =>
   new Response(JSON.stringify(body), {
@@ -152,6 +162,10 @@ describe("schedule lib", () => {
 });
 
 describe("/cfb/ scoreboard route", () => {
+  beforeEach(async () => {
+    await clearScoreboardKv();
+  });
+
   it("renders the scoreboard with chrome, dropdowns, and game cards", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       jsonResponse({ events: [sampleGame()] }),
@@ -230,6 +244,79 @@ describe("/cfb/ scoreboard route", () => {
     const body = await res.text();
     expect(body).toContain(">uga</strong>");
     expect(body).not.toContain(">AAA<");
+  });
+});
+
+describe("sub-phase 2F: cron-warmed scoreboard helpers", () => {
+  beforeEach(async () => {
+    await clearScoreboardKv();
+  });
+
+  describe("isFootballSeason", () => {
+    it("returns true Aug 20 onward", () => {
+      expect(isFootballSeason(new Date("2024-08-20T00:00Z"))).toBe(true);
+      expect(isFootballSeason(new Date("2024-08-25T00:00Z"))).toBe(true);
+      expect(isFootballSeason(new Date("2024-12-31T23:59Z"))).toBe(true);
+    });
+    it("returns true through Jan 20", () => {
+      expect(isFootballSeason(new Date("2025-01-01T00:00Z"))).toBe(true);
+      expect(isFootballSeason(new Date("2025-01-20T23:59Z"))).toBe(true);
+    });
+    it("returns false in the off-season window", () => {
+      expect(isFootballSeason(new Date("2024-01-21T00:00Z"))).toBe(false);
+      expect(isFootballSeason(new Date("2024-04-15T00:00Z"))).toBe(false);
+      expect(isFootballSeason(new Date("2024-07-31T23:59Z"))).toBe(false);
+      expect(isFootballSeason(new Date("2024-08-19T23:59Z"))).toBe(false);
+    });
+  });
+
+  describe("writeCurrentScoreboard", () => {
+    it("calls the ESPN site-API scoreboard endpoint and writes the events to KV", async () => {
+      const games = [sampleGame()];
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async () => jsonResponse({ events: games }));
+      const count = await writeCurrentScoreboard(env.LEAGUE_DATA);
+      expect(count).toBe(1);
+      const url = String(fetchSpy.mock.calls[0]![0]);
+      expect(url).toContain("site.api.espn.com");
+      expect(url).toContain("groups=80");
+      const cached = await env.LEAGUE_DATA.get("cfb-scoreboard-80");
+      expect(cached).not.toBeNull();
+      const parsed = JSON.parse(cached!) as ScheduleEvent[];
+      expect(parsed[0].id).toBe("401628412");
+    });
+
+    it("propagates ESPN failures so the cron logs them", async () => {
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        async () => new Response("nope", { status: 503 }),
+      );
+      await expect(writeCurrentScoreboard(env.LEAGUE_DATA)).rejects.toThrow(/returned 503/);
+    });
+  });
+
+  describe("getCachedCurrentScoreboard", () => {
+    it("returns the KV-cached payload when present (no ESPN call)", async () => {
+      await env.LEAGUE_DATA.put(
+        "cfb-scoreboard-80",
+        JSON.stringify([sampleGame({ id: "from-kv" })]),
+      );
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      const games = await getCachedCurrentScoreboard(env.LEAGUE_DATA);
+      expect(games).toHaveLength(1);
+      expect(games[0].id).toBe("from-kv");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("falls back to ESPN on KV miss and writes through", async () => {
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        jsonResponse({ events: [sampleGame({ id: "from-espn" })] }),
+      );
+      const games = await getCachedCurrentScoreboard(env.LEAGUE_DATA);
+      expect(games[0].id).toBe("from-espn");
+      const cached = await env.LEAGUE_DATA.get("cfb-scoreboard-80");
+      expect(cached).not.toBeNull();
+    });
   });
 });
 
