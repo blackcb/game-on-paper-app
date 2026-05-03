@@ -1,0 +1,55 @@
+# Sub-phase 2H: public Python endpoint for the Cloudflare Worker.
+#
+# The Worker (sports.unseen-university.org, served from CF edge)
+# can't reach the Docker-internal `python:7000` hostname. This vhost
+# exposes /cfb/process publicly at https://python.unseen-university.org,
+# gated on a shared-secret header so only the Worker can hit it.
+#
+# Source of truth lives in this repo. The fork-deploy.yml workflow
+# substitutes ${WORKER_SHARED_SECRET} (from a GitHub Actions secret)
+# at deploy time and writes the rendered file into
+# /etc/caddy/conf.d/ on the droplet. The existing /etc/caddy/Caddyfile
+# imports anything in conf.d/ via `import conf.d/*.caddy`, set up
+# once during the 2H bring-up.
+#
+# Rotation: update the WORKER_SHARED_SECRET GitHub Actions secret,
+# update the Wrangler secret to match (`echo -n "$NEW" | wrangler
+# secret put WORKER_SHARED_SECRET`), push to the fork branch — CI
+# does the rest.
+
+python.unseen-university.org {
+    # Header matcher: requests must carry X-Worker-Secret with the
+    # configured value. The literal string is templated in at deploy
+    # time by envsubst, so the file in this repo never carries the
+    # actual secret.
+    @worker_auth header X-Worker-Secret ${WORKER_SHARED_SECRET}
+
+    # Authorized requests proxy to the Python container on the
+    # Docker-internal network. Caddy resolves `python` via Docker's
+    # DNS because the Caddy systemd service runs on the same host
+    # as the Docker daemon.
+    handle @worker_auth {
+        reverse_proxy python:7000
+    }
+
+    # Anything else (no header, wrong header) gets a flat 403 with
+    # no proxy attempt. Keeps unauthenticated traffic from ever
+    # reaching the Python pipeline.
+    handle {
+        respond "Forbidden" 403
+    }
+
+    # Reuses the Cloudflare Origin Cert from
+    # docs/replica-deploy-plan.md Phase C — it covers
+    # *.unseen-university.org so this subdomain is automatically in
+    # scope without re-issuing.
+    tls /etc/caddy/origin.pem /etc/caddy/origin.key
+
+    # Separate access log for forensics on the Python boundary
+    # specifically (volume should be tiny — only the Worker hits
+    # this and only on cache misses).
+    log {
+        output file /var/log/caddy/python.access.log
+        format json
+    }
+}

@@ -111,19 +111,25 @@ Container investment now is too speculative. The bridge is
 throwaway; if maintainer says yes we eventually replace it
 with 3B, if they say no we drop the whole thing.
 
-**Phase 2H runbook is in the 2H section below.** Five
-USER ACTION steps remain:
+**Phase 2H runbook is in the 2H section below.** The Caddy
+config is now codified in `caddy/python.unseen-university.org.caddy`
+and ships through the existing fork-deploy.yml workflow — no
+more SSH-and-edit. Steps remaining for the user:
 
 1. Generate the shared secret (`openssl rand -hex 32`).
-2. Edit Caddyfile on the droplet to add the
-   `python.unseen-university.org` vhost with header gate.
-3. Add the `python` DNS record in the CF dashboard.
-4. `wrangler secret put WORKER_SHARED_SECRET`.
-5. Smoke against `*.workers.dev`, then add the Workers
+2. One-time droplet setup: `mkdir conf.d`, add `import` line
+   to existing Caddyfile, optional sudoers fragment.
+3. Add `WORKER_SHARED_SECRET` as a GitHub Actions repo secret.
+4. Add the `python` DNS record in the CF dashboard (proxied A
+   record → droplet IP).
+5. Run `wrangler secret put WORKER_SHARED_SECRET` once locally.
+6. Push the branch — CI deploys the codified Caddy snippet
+   alongside the docker compose.
+7. Smoke against `*.workers.dev`, then add the Workers
    Custom Domain for `sports.unseen-university.org`
    (the actual destructive flip).
 
-Rollback for step 5 is one click in the same dashboard pane
+Rollback for step 7 is one click in the same dashboard pane
 (remove the Custom Domain → traffic falls back to droplet).
 
 Other open items, lower priority:
@@ -931,60 +937,69 @@ openssl rand -hex 32
 ```
 
 Treat the output like a password — do NOT commit it to git.
-Used in two places: the Caddy config (2H.3) and a Wrangler
-secret (2H.5).
+Used in two places: the GitHub Actions secret (consumed by the
+deploy workflow that updates Caddy on the droplet) and a
+Wrangler secret (consumed by the Worker at runtime). Same value
+in both.
 
 > **USER ACTION**: Generate the secret, save it somewhere safe
-> (1Password / pass / similar). The same value goes into Caddy
-> AND `wrangler secret put` — they have to match.
+> (1Password / pass / similar).
 
-##### 2H.3 USER ACTION — Caddy: add the python.unseen-university.org vhost
+##### 2H.3 USER ACTION — one-time droplet setup for codified Caddy
 
-Add this to the droplet's `/etc/caddy/Caddyfile` (or wherever
-the existing `sports.unseen-university.org` block lives):
+The `caddy/python.unseen-university.org.caddy` snippet ships
+through the existing fork-deploy.yml workflow. The deploy step
+expects two things to already exist on the droplet:
 
-```caddyfile
-python.unseen-university.org {
-    @worker_auth header X-Worker-Secret <PASTE_THE_SECRET_HERE>
+1. `/etc/caddy/conf.d/` directory.
+2. An `import /etc/caddy/conf.d/*.caddy` line in the existing
+   `/etc/caddy/Caddyfile`.
 
-    handle @worker_auth {
-        reverse_proxy python:7000
-    }
-
-    handle {
-        respond "Forbidden" 403
-    }
-
-    tls /etc/caddy/origin.pem /etc/caddy/origin.key
-    log {
-        output file /var/log/caddy/python.access.log
-        format json
-    }
-}
-```
-
-Notes:
-- Replace `<PASTE_THE_SECRET_HERE>` with the 64-char hex from
-  2H.2.
-- The `tls` paths reuse the Origin Cert from
-  `replica-deploy-plan.md` Phase C (it covers `*.unseen-university.org`,
-  so it's valid for the new subdomain too without re-issuing).
-- `python:7000` is the Docker-internal hostname — same one the
-  Express frontend uses. Caddy resolves it via Docker's DNS
-  because Caddy itself is in the same compose network.
-- `respond 403` on the fallback handler means any request
-  without the secret header gets a flat 403, no proxy attempt.
-
-After editing:
+Run this once, via SSH:
 
 ```
+sudo mkdir -p /etc/caddy/conf.d
+sudo grep -q 'import conf.d' /etc/caddy/Caddyfile \
+  || echo 'import /etc/caddy/conf.d/*.caddy' \
+     | sudo tee -a /etc/caddy/Caddyfile
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
-> **USER ACTION**: Edit Caddyfile on the droplet, validate, reload.
+The deploy user (`secrets.DEPLOY_USER`) also needs passwordless
+sudo for `install`, `caddy validate`, and `systemctl reload caddy`.
+If sudo is already passwordless for that user (likely — the
+existing deploy steps run docker compose), there's nothing to do.
+If not, add a sudoers fragment:
 
-##### 2H.4 USER ACTION — Cloudflare DNS: add python.unseen-university.org
+```
+echo "$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/install, /usr/bin/caddy, /bin/systemctl reload caddy" \
+  | sudo tee /etc/sudoers.d/deploy-caddy
+sudo chmod 440 /etc/sudoers.d/deploy-caddy
+```
+
+> **USER ACTION**: SSH into the droplet, run the conf.d setup
+> + sudoers fragment if needed.
+
+##### 2H.4 USER ACTION — add WORKER_SHARED_SECRET to GitHub Actions
+
+In the fork repo's GitHub settings:
+
+1. Settings → Secrets and variables → Actions → New repository
+   secret.
+2. Name: `WORKER_SHARED_SECRET`
+3. Value: the 64-char hex from 2H.2.
+
+After this lands, the next push to
+`instrument-plus-cloudflare-cdn` triggers the deploy workflow,
+which renders `caddy/python.unseen-university.org.caddy` with
+`${WORKER_SHARED_SECRET}` substituted in, scp's it to
+`/etc/caddy/conf.d/` on the droplet, validates, and reloads
+Caddy. No more SSH-and-edit.
+
+> **USER ACTION**: Add the GitHub Actions secret.
+
+##### 2H.5 USER ACTION — Cloudflare DNS: add python.unseen-university.org
 
 In the Cloudflare dashboard for `unseen-university.org`:
 
@@ -1002,11 +1017,15 @@ automatically inherits the firewall posture.
 
 > **USER ACTION**: Add the DNS record in the CF dashboard.
 
-##### 2H.5 USER ACTION — Wrangler secret
+##### 2H.6 USER ACTION — Wrangler secret (one-time, manual)
 
-From `worker/`:
+The Worker side of the secret isn't pushed by CI today (would
+require adding `CLOUDFLARE_API_TOKEN` as a GH Actions secret,
+which is more setup than the value warrants for a rarely-rotated
+secret). Set it once locally:
 
 ```
+cd worker
 eval "$(grep '^export CLOUDFLARE_API_TOKEN' ~/.zshrc)"
 echo -n '<PASTE_THE_SECRET_HERE>' | npx wrangler secret put WORKER_SHARED_SECRET
 ```
@@ -1019,18 +1038,54 @@ npx wrangler secret list
 
 Should show `WORKER_SHARED_SECRET` with a `(secret)` source.
 
-> **USER ACTION**: Run the secret-put commands above. Same
-> 64-char hex as in 2H.3.
+If the secret is ever rotated:
+1. Update `WORKER_SHARED_SECRET` in GitHub Actions secrets.
+2. Run the `wrangler secret put` command above with the new
+   value.
+3. Push to `instrument-plus-cloudflare-cdn`. CI redeploys
+   Caddy with the new value; the Worker is already updated.
 
-##### 2H.6 Pre-cutover smoke
+There's a brief window during step 3 where Caddy and the Worker
+disagree (rejected requests render game_error). Live game pages
+auto-refresh every minute so this self-heals; static caches are
+fine because they don't carry the secret.
 
-Once 2H.3 / 2H.4 / 2H.5 are done, deploy the Worker (still
-serving from `sports.unseen-university.workers.dev`, no
-custom domain yet) and verify Python is reachable end-to-end:
+> **USER ACTION**: Run the wrangler secret put command above.
+> Same 64-char hex as the GitHub Actions secret in 2H.4.
+
+##### 2H.7 Push the branch — CI does the Caddy + DNS prep
 
 ```
-cd worker
-npx wrangler deploy
+git push origin instrument-plus-cloudflare-cdn
+```
+
+The fork-deploy.yml workflow (Actions → fork-deploy in the GH
+UI) runs:
+
+1. Build container images (Python, frontend, redis).
+2. Run pytest + schema-freshness check.
+3. Deploy docker compose on the droplet.
+4. **(new in 2H)** Stage `caddy/*.caddy` on the droplet, render
+   with `${WORKER_SHARED_SECRET}` substituted in via envsubst,
+   `install` the rendered files into `/etc/caddy/conf.d/`,
+   `caddy validate`, `systemctl reload caddy`.
+5. Run Playwright E2E suite + Lighthouse.
+
+If the workflow fails at step 4, the most likely causes are:
+- `WORKER_SHARED_SECRET` GH Actions secret is missing (added
+  in 2H.4).
+- `/etc/caddy/conf.d/` doesn't exist on the droplet (one-time
+  setup in 2H.3).
+- Deploy user lacks passwordless sudo for `install` /
+  `systemctl reload caddy` (sudoers fragment in 2H.3).
+
+##### 2H.8 Pre-cutover smoke
+
+Once 2H.3 – 2H.7 are done, verify Python is reachable end-to-end
+through the Worker (still serving from
+`sports.unseen-university.workers.dev`, no custom domain yet):
+
+```
 curl -s "https://sports.unseen-university.workers.dev/cfb/game/401520434?bust=$(date +%s)" \
   | grep -oE "Win Probability|There is no play-by-play"
 ```
@@ -1050,7 +1105,7 @@ sudo tail -f /var/log/caddy/python.access.log
 docker compose logs -f python
 ```
 
-##### 2H.7 USER ACTION — Workers Custom Domain (the destructive step)
+##### 2H.9 USER ACTION — Workers Custom Domain (the destructive step)
 
 In the Cloudflare dashboard:
 
@@ -1067,7 +1122,7 @@ by the Custom Domain (still in place but unused).
 > = remove the Custom Domain in the same dashboard pane.
 > ~30 seconds to apply.
 
-##### 2H.8 Post-cutover smoke
+##### 2H.10 Post-cutover smoke
 
 ```
 # Worker is the origin now — verify cf-ray header indicates Worker
@@ -1083,7 +1138,7 @@ curl -sI https://sports.unseen-university.org/assets/js/dashboard.js | grep -iE 
 curl -sI https://python.unseen-university.org/cfb/process | head -1   # expect 403
 ```
 
-##### 2H.9 Burn-in + cleanup (24-48h)
+##### 2H.11 Burn-in + cleanup (24-48h)
 
 - ☐ Monitor Workers Logs for `event: schema_validation_failure`
   lines (none expected) and the `event: request` cadence.

@@ -157,6 +157,65 @@ jobs:
             docker compose up -d --remove-orphans
             docker compose ps
 
+      # Sub-phase 2H: ship the Caddy snippet that exposes Python at
+      # https://python.unseen-university.org for the Cloudflare Worker.
+      # Only runs after the docker compose deploy succeeds — Caddy
+      # `reverse_proxy python:7000` would 502 if Python isn't up.
+      #
+      # One-time droplet setup required before this step works:
+      #   sudo mkdir -p /etc/caddy/conf.d
+      #   sudo grep -q 'import conf.d' /etc/caddy/Caddyfile \
+      #     || echo 'import /etc/caddy/conf.d/*.caddy' \
+      #        | sudo tee -a /etc/caddy/Caddyfile
+      #   sudo systemctl reload caddy
+      # Plus the deploy user needs passwordless sudo for `install`,
+      # `caddy validate`, and `systemctl reload caddy`.
+      - name: Stage Caddy snippets
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          source: caddy/*.caddy
+          target: /tmp/caddy-stage/
+          overwrite: true
+          strip_components: 1
+
+      - name: Render + install Caddy snippets, reload Caddy
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          WORKER_SHARED_SECRET: ${{ secrets.WORKER_SHARED_SECRET }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          # appleboy/ssh-action only forwards env vars listed here.
+          envs: WORKER_SHARED_SECRET
+          script: |
+            set -e
+            if [ -z "${WORKER_SHARED_SECRET}" ]; then
+              echo "::error::WORKER_SHARED_SECRET GitHub Actions secret is empty or unset"
+              exit 1
+            fi
+            for src in /tmp/caddy-stage/*.caddy; do
+              name=$(basename "$src")
+              # envsubst rendered as the deploy user; sudo install
+              # only does the file move so the secret never appears
+              # on a sudo command line. install with mode 0640 so
+              # only root + the caddy group can read the rendered
+              # config.
+              tmp_out=$(mktemp)
+              envsubst < "$src" > "$tmp_out"
+              sudo install -o root -g caddy -m 0640 "$tmp_out" \
+                "/etc/caddy/conf.d/$name"
+              rm -f "$tmp_out"
+            done
+            sudo caddy validate --config /etc/caddy/Caddyfile
+            sudo systemctl reload caddy
+            rm -rf /tmp/caddy-stage
+
   e2e:
     # Run Playwright after deploy completes so we test what was just rolled
     # out. Inlined here rather than in e2e.yml because workflow_run only
