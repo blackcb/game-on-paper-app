@@ -404,9 +404,11 @@ app.get("/cfb/game/:gameId", async (c) => {
     if (cached?.gameInfo?.status?.type?.completed === true) {
       if (isJsonShortcut) return c.json(cached);
       const season = clampSeason(cached.header?.season?.year);
-      let percentiles: unknown[] = [];
+      let percentiles: Array<Record<string, unknown>> = [];
       try {
-        percentiles = await retrievePercentiles(c.env.LEAGUE_DATA, season, null);
+        percentiles = (await retrievePercentiles(c.env.LEAGUE_DATA, season, null)) as Array<
+          Record<string, unknown>
+        >;
       } catch (err) {
         console.log(`percentiles fetch failed (cached path): ${(err as Error).message}`);
       }
@@ -480,9 +482,11 @@ app.get("/cfb/game/:gameId", async (c) => {
 
   const headerSeason = data.header?.season?.year ?? season;
   const clamped = clampSeason(headerSeason);
-  let percentiles: unknown[] = [];
+  let percentiles: Array<Record<string, unknown>> = [];
   try {
-    percentiles = await retrievePercentiles(c.env.LEAGUE_DATA, clamped, null);
+    percentiles = (await retrievePercentiles(c.env.LEAGUE_DATA, clamped, null)) as Array<
+      Record<string, unknown>
+    >;
   } catch (err) {
     console.log(`percentiles fetch failed: ${(err as Error).message}`);
   }

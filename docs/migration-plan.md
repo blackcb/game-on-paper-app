@@ -41,41 +41,46 @@ USER ACTION step without confirmation from the user.**
     * `/cfb/year/:year/type/:type/week/:week` (week scoreboard)
     * `/cfb/year/:year` (year scoreboard, defaults to type=2 week=1)
     * `/cfb/game/:gameId` (route + cache + Python proxy + game_error
-      + pregame + Game stub — full game template port pending)
+      + pregame + **full Game template** — chrome, WP/EP charts,
+      slim + advanced box score, per-team player stats, pass +
+      rush matrices, big plays / important plays / scoring plays /
+      drives + per-drive field charts / all plays)
     * + `/cfb/healthcheck` placeholder
-  - 2B routes pending: full game template port (charts, drive chart,
-    advanced box score, slim_box_score, field, pass_chart,
-    rush_chart, PBP table). Route is live with a stub Game.tsx that
-    renders chrome + scoring summary + a "see upstream" notice.
+  - **2B is fully ported.** The `?json=1` shortcut is preserved at
+    every branch where PBP is in hand. WP/EP/field charts use the
+    JSON-island pattern (Worker emits `var gameData = ...`,
+    unmodified `/assets/js/{dashboard,field}.js` consume it) so the
+    chart code didn't get reimplemented. Real game IDs still render
+    `game_error` in production until Python becomes reachable from
+    the CF edge (sub-phase 3B Container binding or 2H cutover) —
+    same posture as the prior commit.
   - 2D (Cache API) / 2E (assets) / 2F (cron) / 2H (cutover): not started
-  - 2G (tests): 128 vitest assertions, ~2.7 s.
+  - 2G (tests): 128 vitest assertions, ~2.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-02 (Phase 2B — game route shipped with stub
-  Game template; full template port pending)
+- Last updated: 2026-05-03 (Phase 2B — full game template port
+  completed; sub-phase 2B is now done end-to-end)
 
 ### Next session entry point
 
-End-of-day stop on 2026-05-02. Branch
-`instrument-plus-cloudflare-cdn`, last commit
-`83a9acc` (Phase 2B: wire /cfb/game/:gameId). Working tree clean,
-21 commits ahead of origin (not pushed by request — push when the
-next phase lands or upstream is ready).
+End-of-day stop on 2026-05-03. Branch
+`instrument-plus-cloudflare-cdn`, last commit (post-port) on the
+Game.tsx full body. Working tree clean once the port is committed.
 
-Pick up at the **Phase 2 → 2B → game.ejs full port** Resume hint
-block lower in this file (search "Resume hint (next session)"
-under Phase 2 Notes). One-line summary: replace the deliberate
-stub at `worker/src/templates/Game.tsx` with the full port of
-`frontend/views/pages/cfb/game.ejs` (1501 lines) plus the four
-remaining partials (`slim_box_score`, `field`, `pass_chart`,
-`rush_chart`). The route, cache, Python proxy, game_error, and
-pregame are already live; only the Game.tsx body needs replacing.
+**Phase 2B is complete.** Pick up at sub-phase **2D — Cache API
+for per-game PBP** (replace KV per-game cache with `caches.default`
+keyed by URL; quarantine check moves into the Worker; in-progress
+games get `s-maxage=30`, completed games `s-maxage=31536000`).
+After 2D, the natural next steps are 2E (Workers Static Assets
+binding so `/assets/*` stops 404'ing in production — needed for
+the WP/EP/field charts to actually render) and 2F (cron-warmed
+scoreboard).
 
 Sanity before starting:
 ```
 cd worker
 npx tsc --noEmit          # should be clean
-npx vitest run            # 128 tests / 11 files / ~2.7s
+npx vitest run            # 128 tests / 11 files / ~2.9s
 eval "$(grep '^export CLOUDFLARE_API_TOKEN' ~/.zshrc)"
 npx wrangler deploy       # smoke at sports.unseen-university.workers.dev
 ```
@@ -636,24 +641,33 @@ Port in this order (simplest first, biggest at the end):
   `templates/GameThumb.tsx` so both pages share one definition.
   Live deploy: `/cfb/` returns 99 game thumbs (213 KB), the year
   variants return 100 (243 KB).
-- ◐ `/cfb/game/:gameId` — **route + branches done, full Game template
-  pending.** **Started 2026-05-02.** Game data layer at `lib/games.ts`:
-  KV-backed cache (`cfb-game-${id}` keys, 60s TTL on in-progress, 1
-  day on completed; sub-phase 2D will swap KV for Cache API), Python
-  proxy via `env.PYTHON_BASE_URL`, `calculateGEI` ported verbatim
-  with the original last-play finalWP semantics, `cleanName`
-  helper for the Georgia-61 nickname-lowercase rule, and the
-  `QUARANTINE_LIST` constant. Route handles all six branches: cache-
-  first JSON shortcut, cache-first HTML render, ESPN probe →
-  scheduled→pregame, quarantined→game_error, Python failure→game_error,
-  successful Python→Game stub. `?json=1` works at every branch where
-  PBP is in hand. `templates/GameError.tsx` and `templates/Pregame.tsx`
+- ☑ `/cfb/game/:gameId` — **fully ported 2026-05-03.** Started
+  2026-05-02 with the route + branches + a stub Game template;
+  finished 2026-05-03 with the full Game template port. Game data
+  layer at `lib/games.ts`: KV-backed cache (`cfb-game-${id}` keys,
+  60s TTL on in-progress, 1 day on completed; sub-phase 2D will
+  swap KV for Cache API), Python proxy via `env.PYTHON_BASE_URL`,
+  `calculateGEI` ported verbatim with the original last-play
+  finalWP semantics, `cleanName` helper for the Georgia-61
+  nickname-lowercase rule, and the `QUARANTINE_LIST` constant.
+  Route handles all six branches: cache-first JSON shortcut,
+  cache-first HTML render, ESPN probe → scheduled→pregame,
+  quarantined→game_error, Python failure→game_error, successful
+  Python→Game. `?json=1` works at every branch where PBP is in
+  hand. `templates/GameError.tsx` and `templates/Pregame.tsx`
   are full ports (matchup partial inlined as a JSX subcomponent
-  inside Pregame). `templates/Game.tsx` is a deliberate stub —
-  renders score header + scoring summary + a notice pointing
-  upstream + the JSON shortcut. Live deploys: quarantined IDs
-  render the quarantine page; non-quarantined IDs without Python
-  reachability render the pbp-error page (Python's internal
+  inside Pregame). **`templates/Game.tsx` is now a full port of
+  game.ejs (1501 lines) plus `slim_box_score`, `field`,
+  `pass_chart`, and `rush_chart` partials**: chrome + nav
+  scroller, WP/EP charts, slim box score (with percentile-derived
+  color ramp + tooltips), advanced box score (8 sub-tables in 3
+  columns), per-team player stats panel with sorted dropbacks /
+  rushes / receivers + DETMER chip, pass + rush matrices,
+  big plays / most important plays / scoring plays / drives /
+  all-plays tables (each with the EJS expand-row content), and
+  per-drive field charts. Live deploys: quarantined IDs render
+  the quarantine page; non-quarantined IDs without Python
+  reachability still render the pbp-error page (Python's internal
   `http://python:7000` URL isn't routable from the CF edge yet —
   resolves at sub-phase 3B Container binding or 2H cutover).
   TeamCard, TeamSlice, GameThumb hoisted to their own template
@@ -779,30 +793,77 @@ Two options, pick one:
 
 ### Notes
 
-#### Resume hint (next session)
+#### 2B game.ejs full port (2026-05-03)
 
-Game route is wired but `templates/Game.tsx` is a stub that renders
-chrome + scoring summary + a "see upstream" notice. Next session:
-finish porting `frontend/views/pages/cfb/game.ejs` (1501 lines) and
-its four remaining partials:
+The 1501-line `game.ejs` and its four remaining partials
+(`slim_box_score`, `field`, `pass_chart`, `rush_chart`) all ship
+in this commit. New worker modules:
 
-- `slim_box_score.ejs` (264 lines) — team-vs-team line score table.
-- `field.ejs` (31 lines) — drive-chart-friendly SVG football field.
-- `pass_chart.ejs` (222 lines) — passing chart (target depth × yards).
-- `rush_chart.ejs` (94 lines) — rushing chart.
+- `lib/box_score.ts` — `STAT_KEY_TITLE_MAPPING` (130+ entries with
+  HTML entities), `TURNOVER_VEC`, the three column-shape sets
+  (`NON_RATE_*`), the slim-variant percentile-key + display label
+  mappings, `boxScoreRetrievePercentile`, `boxScoreColorRampClass`,
+  `geiPercentileBands` (gei chip variant), `handleRates` (8 box
+  score sub-tables), `handleSlimBoxScoreRates` (percentile-chip
+  cells), `formatDown/formatYardline/formatDistance/formatPeriod`,
+  `calculateDETMER`, `isChampionshipEvent`, `sortAdvBoxScoreInPlace`,
+  `unique`. All exported as pure functions returning JSX-ready
+  cell descriptors so the template stays focused on layout.
+- `lib/play_charts.ts` — `computePassMatrix` / `computeRushMatrix`
+  (server-side aggregation that the EJS partials did inline),
+  `buildFieldRenderScript` (emits the per-drive `render${id}()`
+  function body that calls into the global `Field` class loaded
+  from `/assets/js/field.js`).
 
-The chart partials inline a lot of D3/Chart.js wiring; check whether
-a JSON island + unmodified `/assets/js` script works (same pattern
-as Team.tsx / Pregame.tsx) before reimplementing chart code in
-JSX. Server-side: the win-prob chart, drive chart, advanced box
-score, and play-by-play table all read from `gameData` directly,
-so a faithful port should be mechanical even though it's tall.
+**Decisions made**:
+- **JSON-island for charts.** The WP/EP charts, the per-drive
+  field charts, and the championship-CSS gate all use the same
+  pattern as `Team.tsx` / `Pregame.tsx` — render canvases server-
+  side, expose `gameData` as a global, let unmodified
+  `/assets/js/{dashboard,field}.js` consume it. Avoided
+  re-implementing 600+ lines of Chart.js/D3 wiring in TS.
+- **`roundNumberZero` vs `roundNumber`.** game.ejs uses two
+  variants of the same function — leaderboard.ts's `roundNumber`
+  returns "N/A" for nullish, but game.ejs's coerces null/undefined
+  to 0. Box-score cells need the latter so a missing stat renders
+  "0.00" rather than "N/A". Both are now exported separately;
+  callers pick based on intent.
+- **`handleRates` returns descriptors, not strings.** EJS built
+  HTML strings; the JSX port returns `BoxScoreCell[]` and lets
+  the JSX render the actual `<td>`. Cleaner test surface and no
+  `dangerouslySetInnerHTML` for the cell values themselves
+  (only the row labels need it for the `&emsp;&emsp;` indents).
+- **Field-chart script generation.** field.ejs emits a per-drive
+  `<script>function renderXX() { ... }</script>` block; we mirror
+  it exactly in `buildFieldRenderScript`, including the offense
+  color hex and the "skip these play types" set. The Worker
+  bundles the script body and the JSX dangerously-sets it inside
+  the drive's expand panel — same `data-bs-toggle="collapse"`
+  + `onclick="render${drive.id}()"` shape, so the existing
+  Bootstrap accordion behavior works unchanged.
+- **`PlayRecord` typing.** Added a fairly tight TS interface for
+  plays (start/end/expectedPoints/winProbability/...). The Python
+  payload has 200+ keys per play — only the ones the template
+  actually reads are typed; the `[key: string]: unknown` index
+  signature catches the rest.
+- **Test-suite update.** The single test that exercised the stub
+  (`renders the stub Game page on a cached completed payload`)
+  was updated to (a) provide a properly-shaped play with start/end
+  blocks, (b) assert against the new surface — "Win Probability",
+  "Drives", "var gameData =" island. Stayed at 128 tests / ~2.9 s.
 
-Then sub-phase 2D (Cache API) becomes worth doing — `caches.default`
-keyed by URL replaces the current KV-based per-game cache.
+**Resume hint (next session)**: pick up at sub-phase **2D — Cache
+API for per-game PBP**. The KV-based per-game cache in
+`lib/games.ts` (key `cfb-game-${id}`) needs to be replaced with
+`caches.default` keyed by the request URL. Quarantine check moves
+into the Worker. `Cache-Control: public, max-age=86400, s-maxage=31536000`
+for completed games; `s-maxage=30` for in-progress. After 2D, do
+2E (Workers Static Assets binding so `/assets/*` stops 404'ing in
+production — needed for the WP/EP/field charts to actually render
+end-to-end against the deployed Worker).
 
 Verification before starting: `cd worker && npx vitest run` should
-pass 128 tests in ~2.7s, `npx tsc --noEmit` clean. The token is in
+pass 128 tests in ~2.9s, `npx tsc --noEmit` clean. The token is in
 `~/.zshrc`; pull it with `eval "$(grep '^export CLOUDFLARE_API_TOKEN' ~/.zshrc)"`
 in any subprocess that needs Cloudflare access.
 
@@ -817,6 +878,14 @@ worker/
       schedule.json        ← bundled (75 KB)
       groups.json          ← bundled (2 KB)
     lib/
+      box_score.ts         ← NEW: STAT_KEY_TITLE_MAPPING,
+                            TURNOVER_VEC, column-shape sets,
+                            handleRates / handleSlimBoxScoreRates,
+                            geiPercentileBands, format* helpers,
+                            calculateDETMER, isChampionshipEvent
+      play_charts.ts       ← NEW: computePassMatrix,
+                            computeRushMatrix,
+                            buildFieldRenderScript
       games.ts             ← getPBP/peekCachedPBP (KV cache),
                             probeEspnPbp, calculateGEI, cleanName,
                             QUARANTINE_LIST
@@ -850,9 +919,18 @@ worker/
       GameError.tsx        ← /cfb/game/:id error variants
       Pregame.tsx          ← scheduled-game preview + matchup
                             (matchup partial inlined as subcomponent)
-      Game.tsx             ← STUB: chrome + scoring summary +
-                            "see upstream" notice. Full game.ejs
-                            port is the next commit.
+      Game.tsx             ← FULL PORT: chrome + WP/EP charts +
+                            slim/advanced box score (8 sub-tables)
+                            + per-team player stats with pass/rush
+                            matrices + big/important/scoring/all
+                            plays tables with collapse rows + drives
+                            with per-drive field charts.
+                            Subcomponents: SlimBoxScore,
+                            BoxScoreTable, PassRow/RushRow/
+                            ReceiverRow, PlayerStatsPanel,
+                            PassMatrixView, RushMatrixView,
+                            PlayRow, PlayTable, DriveRow,
+                            DrivesTable, ScoreHeader.
     types/env.d.ts         ← Cloudflare.Env (KV bindings)
   test/                    ← one .test.ts per route + lib unit tests
   wrangler.toml            ← name=sports, KV bindings

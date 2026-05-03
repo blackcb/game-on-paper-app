@@ -194,30 +194,56 @@ describe("/cfb/game/:gameId route", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("renders the stub Game page on a cached completed payload", async () => {
+  it("renders the full Game page on a cached completed payload", async () => {
+    // Minimal-but-realistic play shape — the play table needs
+    // start/end blocks, and the drives section needs `drive.id`.
+    const samplePlay = {
+      game_play_number: 1,
+      period: 1,
+      pos_team: "61",
+      clock: { displayValue: "12:34", minutes: "12", seconds: "34" },
+      type: { text: "Pass Reception" },
+      text: "Carson Beck 22 yard pass to Arian Smith for a TD",
+      scoringPlay: true,
+      homeScore: 7,
+      awayScore: 0,
+      pass: 1,
+      start: {
+        down: 1,
+        distance: 10,
+        yardsToEndzone: 22,
+        pos_team: { id: "61" },
+        team: { id: "61" },
+        pos_team_score: 0,
+        def_pos_team_score: 0,
+      },
+      end: { yardsToEndzone: 0, team: { id: "61" } },
+      expectedPoints: { added: 4.2, before: 1.8, after: 6.0 },
+      winProbability: { added: 0.15, before: 0.45, after: 0.6 },
+      EPA: 4.2,
+      "drive.id": "1",
+    };
     const sample = {
       gameInfo: sampleGameInfo(),
       header: { season: { year: 2024 } },
-      plays: [],
-      scoringPlays: [
-        {
-          period: { number: 1 },
-          clock: { displayValue: "12:34" },
-          text: "Carson Beck 22 yard pass to Arian Smith for a TD",
-          homeScore: 7,
-          awayScore: 0,
-          pos_team: "61",
-        },
-      ],
+      plays: [samplePlay],
+      scoringPlays: [samplePlay],
+      advBoxScore: { team: [], situational: [], drives: [], defensive: [], turnover: [] },
+      drives: { previous: [], current: null },
     };
     await env.LEAGUE_DATA.put("cfb-game-401628412", JSON.stringify(sample));
     const res = await SELF.fetch("http://localhost/cfb/game/401628412");
     expect(res.status).toBe(200);
     const body = await res.text();
-    expect(body).toContain("Scoring Summary");
+    expect(body).toContain("Scoring Plays");
     expect(body).toContain("Carson Beck");
-    // Stub notice tells the user the full template is mid-port.
-    expect(body).toContain("mid-port");
+    // The full template carries the navigation scroller into the
+    // win-probability + drives sections — chrome we can rely on.
+    expect(body).toContain("Win Probability");
+    expect(body).toContain("Drives");
+    // The data island must surface so the existing /assets/js
+    // dashboard.js can pick up the WP/EP charts.
+    expect(body).toContain("var gameData =");
   });
 
   it("scheduled game routes to pregame template", async () => {
