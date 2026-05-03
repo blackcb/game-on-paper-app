@@ -3,7 +3,7 @@
 // JSON Schema contract validator on the Python boundary.
 
 import { SELF } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   logSchemaFailure,
   validateProcessResponse,

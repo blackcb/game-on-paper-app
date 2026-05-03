@@ -69,6 +69,13 @@ type Bindings = {
   // this with a Container binding (`PBP_PROCESSOR.fetch(...)`) and
   // the env var goes away.
   PYTHON_BASE_URL: string;
+  // Sub-phase 2H: when Python is exposed publicly through a Caddy
+  // proxy on the droplet (so the Worker can reach it from CF
+  // edge), Caddy enforces an X-Worker-Secret header. The Worker
+  // sends c.env.WORKER_SHARED_SECRET on every Python call. Set
+  // via `wrangler secret put WORKER_SHARED_SECRET`. Optional so
+  // local dev or a future Container binding (3B) doesn't need it.
+  WORKER_SHARED_SECRET?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -564,7 +571,9 @@ app.get("/cfb/game/:gameId", async (c) => {
   // recovers.
   let data: ProcessedGameData;
   try {
-    data = await time(c, "python", () => fetchAndShapePBP(c.env.PYTHON_BASE_URL, gameId));
+    data = await time(c, "python", () =>
+      fetchAndShapePBP(c.env.PYTHON_BASE_URL, gameId, c.env.WORKER_SHARED_SECRET),
+    );
   } catch (err) {
     console.log(`Python /cfb/process failed for ${gameId}: ${(err as Error).message}`);
     return c.html(

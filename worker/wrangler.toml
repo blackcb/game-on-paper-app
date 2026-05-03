@@ -69,11 +69,22 @@ id = "649602a55c7048c5ba433bdece6ba731"
 binding = "SUMMARY_LAST_UPDATED"
 id = "564be97a4ca8419a9ccdc8b0be0f1c3d"
 
-# Python service URL for /cfb/process. In production this points at
-# the droplet's Python container; sub-phase 3B replaces it with a
-# Container binding (`env.PBP_PROCESSOR.fetch(...)`) and this var
-# goes away. Default value here is the Express stack's internal
-# URL — safe because wrangler dev never reaches it; production sets
-# this via `wrangler secret put PYTHON_BASE_URL`.
+# Python service URL for /cfb/process. Sub-phase 2H exposes Python
+# publicly via Caddy on the droplet at https://python.unseen-university.org,
+# gated on a shared-secret header (X-Worker-Secret) the Worker
+# sends from c.env.WORKER_SHARED_SECRET. The secret itself lives
+# outside this file — set via `wrangler secret put WORKER_SHARED_SECRET`
+# so it doesn't end up in git.
+#
+# Sub-phase 3B replaces this URL + secret with a Cloudflare
+# Container binding (`env.PBP_PROCESSOR.fetch(...)`); both go away
+# when that lands.
+#
+# For local dev against a host-network Python container, override
+# in worker/.dev.vars (gitignored):
+#   PYTHON_BASE_URL=http://localhost:7000
+# Inside Docker on the droplet the legacy frontend keeps using the
+# Docker-internal http://python:7000 — that's not this Worker's
+# concern, that's the Express stack's own config.
 [vars]
-PYTHON_BASE_URL = "http://python:7000"
+PYTHON_BASE_URL = "https://python.unseen-university.org"

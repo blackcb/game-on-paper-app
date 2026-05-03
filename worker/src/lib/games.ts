@@ -131,10 +131,19 @@ interface ProcessResponse {
 export async function fetchAndShapePBP(
   pythonBase: string,
   gameId: string | number,
+  // Sub-phase 2H: when the Worker is hitting Python through a
+  // public Caddy hostname, send a shared-secret header so Caddy
+  // can deny anything that didn't originate from this Worker.
+  // Optional so local dev (talking to a localhost Python) and the
+  // pre-cutover Docker-internal path both still work without a
+  // secret.
+  workerSecret?: string | null,
 ): Promise<ProcessedGameData> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (workerSecret) headers["X-Worker-Secret"] = workerSecret;
   const response = await fetch(`${pythonBase}/cfb/process`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ gameId }),
   });
   if (!response.ok) {

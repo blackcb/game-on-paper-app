@@ -82,41 +82,54 @@ USER ACTION step without confirmation from the user.**
     Express side); structured JSON `{event: "request", ...}` log
     line per response; ajv schema validator on Python responses
     (warn-only); Playwright preview-URL update deferred to 2H.
-  - 2H (cutover): not started
+  - 2H (cutover): **prep code shipped 2026-05-03** (Worker
+    sends X-Worker-Secret header, wrangler.toml points at
+    `python.unseen-university.org`). Awaiting USER ACTION:
+    secret generation, Caddyfile edit on droplet, CF DNS
+    record, `wrangler secret put`, and the Custom Domain
+    click. Step-by-step runbook in the 2H section below.
   - vitest suite: 141 assertions across 12 files, ~5.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-03 (Phase 2G — tests + observability
-  completed; Server-Timing + structured logging + ajv schema
-  validator all live)
+- Last updated: 2026-05-03 (Phase 2H — pre-cutover Worker
+  code prep landed; awaiting Caddy edit + DNS click + secret
+  to actually flip `sports.unseen-university.org`)
 
 ### Next session entry point
 
 End-of-day stop on 2026-05-03. Branch `instrument-plus-cloudflare-cdn`,
-five commits ahead of the prior checkpoint: 2B full template port
+six commits ahead of the prior checkpoint: 2B full template port
 (`6f14837`), 2D Cache API (`4dda877`), 2E static assets
-(`aa5f1bb`), 2F cron-warmed scoreboard (`f166679`), and 2G
-observability. Working tree clean once 2G is committed.
+(`aa5f1bb`), 2F cron-warmed scoreboard (`f166679`), 2G
+observability (`1c8d86d`), and 2H prep. Working tree clean
+once 2H prep is committed.
 
-**Phase 2G is complete.** What's left in Phase 2:
-- **2H (parallel deploy + DNS cutover)**: the destructive step
-  that flips `gameonpaper.com` (or the replica) DNS to the
-  Worker. Blocked on the Python proxy gap — `PYTHON_BASE_URL`
-  points at the Docker-internal `http://python:7000` and won't
-  resolve from CF edge. Resolved either by (a) swapping in a
-  publicly-reachable Python URL on the droplet or (b) moving
-  Python into a Cloudflare Container per Phase 3B.
+**Decision (2026-05-03)**: replica cutover via Caddy-fronted
+Python (Option 1) rather than waiting for Phase 3B Containers.
+Maintainer hasn't even seen the Phase 0 PR yet, so any
+Container investment now is too speculative. The bridge is
+throwaway; if maintainer says yes we eventually replace it
+with 3B, if they say no we drop the whole thing.
+
+**Phase 2H runbook is in the 2H section below.** Five
+USER ACTION steps remain:
+
+1. Generate the shared secret (`openssl rand -hex 32`).
+2. Edit Caddyfile on the droplet to add the
+   `python.unseen-university.org` vhost with header gate.
+3. Add the `python` DNS record in the CF dashboard.
+4. `wrangler secret put WORKER_SHARED_SECRET`.
+5. Smoke against `*.workers.dev`, then add the Workers
+   Custom Domain for `sports.unseen-university.org`
+   (the actual destructive flip).
+
+Rollback for step 5 is one click in the same dashboard pane
+(remove the Custom Domain → traffic falls back to droplet).
+
+Other open items, lower priority:
 - **2E follow-on**: hashed-filename + 1-year `/assets/*`
-  cache-rule bump (deferred; nice-to-have before cutover so
-  browser caching is tuned).
-- **2G follow-on**: Playwright preview-URL update (deferred;
-  pairs naturally with 2H since both involve preview deploys).
-
-Recommended next step: think about how to land 2H. The Python
-reachability question is the actual blocker — pick whether to
-go with Phase 3B's Container binding (more work but plan-aligned)
-or a temporary public Python URL on the droplet (quick bridge
-that gets the Worker fully serving real game data this week).
+  cache-rule bump.
+- **2G follow-on**: Playwright preview-URL update.
 
 Sanity before starting:
 ```
@@ -883,22 +896,227 @@ Pages and avoids a second deploy artifact.
 
 #### 2H — Parallel deploy + cutover
 
-- ☐ Deploy the Worker to a `staging.gameonpaper.com` subdomain (or use
-  the auto-generated `*.workers.dev` URL).
-- ☐ Run full Playwright suite against staging.
-- ☐ Manually click through every page type, comparing side-by-side with
-  the production droplet.
-- ☐ Capture pre-cutover metrics (Lighthouse, CF Web Analytics, Server-
-  Timing). Save in this plan's Notes.
-- ☐ **Cutover**: in Cloudflare DNS, change the `@` and `www` records from
-  the droplet IP to a Workers route (`gameonpaper.com/*` →
-  `gameonpaper-worker`). The Worker now handles all traffic.
-  > **DESTRUCTIVE STEP**: confirm with user before cutting over. Have a
-  > rollback DNS edit ready (revert to droplet IP) — under 30 seconds to
-  > apply.
-- ☐ Monitor for 24h. Watch error rate in Workers Analytics, watch
-  `cf-cache-status` distribution.
-- ☐ Capture post-cutover metrics. Compare with pre-cutover.
+**Approach for the replica** (decided 2026-05-03): cut
+`sports.unseen-university.org` over to the Worker entirely; keep
+the droplet running Python (and Caddy + Redis as Python's
+dependencies). The Express frontend container stays online but
+unused as a fast rollback target. The Worker reaches Python via
+a new Caddy-fronted public hostname with a shared-secret header.
+
+This approach is for the **fork's replica only**. Upstream
+`gameonpaper.com` cutover is gated on the maintainer accepting
+the architecture (there's no PR open yet for that conversation,
+let alone merged). The replica running end-to-end is the
+artifact that supports that conversation.
+
+##### 2H.1 Pre-cutover code prep — DONE
+
+- ☑ Worker sends `X-Worker-Secret` header on every Python call.
+  `lib/games.ts` `fetchAndShapePBP` accepts an optional secret;
+  `index.tsx` passes `c.env.WORKER_SHARED_SECRET`. Tests assert
+  the header is set when the secret is provided and omitted
+  when it isn't (back-compat for local dev / 3B Container path).
+- ☑ `wrangler.toml` `[vars] PYTHON_BASE_URL` updated from
+  `http://python:7000` (Docker-internal) to
+  `https://python.unseen-university.org` (the new Caddy-fronted
+  public URL). Comment documents the dev override path
+  (`worker/.dev.vars`).
+
+##### 2H.2 USER ACTION — generate the shared secret
+
+Pick a long random string. From the user's machine:
+
+```
+openssl rand -hex 32
+```
+
+Treat the output like a password — do NOT commit it to git.
+Used in two places: the Caddy config (2H.3) and a Wrangler
+secret (2H.5).
+
+> **USER ACTION**: Generate the secret, save it somewhere safe
+> (1Password / pass / similar). The same value goes into Caddy
+> AND `wrangler secret put` — they have to match.
+
+##### 2H.3 USER ACTION — Caddy: add the python.unseen-university.org vhost
+
+Add this to the droplet's `/etc/caddy/Caddyfile` (or wherever
+the existing `sports.unseen-university.org` block lives):
+
+```caddyfile
+python.unseen-university.org {
+    @worker_auth header X-Worker-Secret <PASTE_THE_SECRET_HERE>
+
+    handle @worker_auth {
+        reverse_proxy python:7000
+    }
+
+    handle {
+        respond "Forbidden" 403
+    }
+
+    tls /etc/caddy/origin.pem /etc/caddy/origin.key
+    log {
+        output file /var/log/caddy/python.access.log
+        format json
+    }
+}
+```
+
+Notes:
+- Replace `<PASTE_THE_SECRET_HERE>` with the 64-char hex from
+  2H.2.
+- The `tls` paths reuse the Origin Cert from
+  `replica-deploy-plan.md` Phase C (it covers `*.unseen-university.org`,
+  so it's valid for the new subdomain too without re-issuing).
+- `python:7000` is the Docker-internal hostname — same one the
+  Express frontend uses. Caddy resolves it via Docker's DNS
+  because Caddy itself is in the same compose network.
+- `respond 403` on the fallback handler means any request
+  without the secret header gets a flat 403, no proxy attempt.
+
+After editing:
+
+```
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+> **USER ACTION**: Edit Caddyfile on the droplet, validate, reload.
+
+##### 2H.4 USER ACTION — Cloudflare DNS: add python.unseen-university.org
+
+In the Cloudflare dashboard for `unseen-university.org`:
+
+1. DNS → Add record:
+   - Type: `A`
+   - Name: `python`
+   - IPv4: the droplet's public IP (`137.184.138.84`, same as
+     the existing `sports` record)
+   - Proxy status: **Proxied** (orange cloud)
+   - TTL: Auto
+
+UFW on the droplet is already locked to Cloudflare IPs
+(replica-deploy-plan.md Phase C), so the new subdomain
+automatically inherits the firewall posture.
+
+> **USER ACTION**: Add the DNS record in the CF dashboard.
+
+##### 2H.5 USER ACTION — Wrangler secret
+
+From `worker/`:
+
+```
+eval "$(grep '^export CLOUDFLARE_API_TOKEN' ~/.zshrc)"
+echo -n '<PASTE_THE_SECRET_HERE>' | npx wrangler secret put WORKER_SHARED_SECRET
+```
+
+Verify it landed:
+
+```
+npx wrangler secret list
+```
+
+Should show `WORKER_SHARED_SECRET` with a `(secret)` source.
+
+> **USER ACTION**: Run the secret-put commands above. Same
+> 64-char hex as in 2H.3.
+
+##### 2H.6 Pre-cutover smoke
+
+Once 2H.3 / 2H.4 / 2H.5 are done, deploy the Worker (still
+serving from `sports.unseen-university.workers.dev`, no
+custom domain yet) and verify Python is reachable end-to-end:
+
+```
+cd worker
+npx wrangler deploy
+curl -s "https://sports.unseen-university.workers.dev/cfb/game/401520434?bust=$(date +%s)" \
+  | grep -oE "Win Probability|There is no play-by-play"
+```
+
+Expected: `Win Probability` (the full Game template renders
+because Python is now reachable). If you see `There is no
+play-by-play`, the secret is wrong or Caddy isn't routing.
+
+Diagnostics if it fails:
+```
+# Worker side: tail logs to see if X-Worker-Secret is being sent.
+npx wrangler tail
+# Caddy side (on the droplet):
+sudo journalctl -u caddy -f
+sudo tail -f /var/log/caddy/python.access.log
+# Python side (on the droplet):
+docker compose logs -f python
+```
+
+##### 2H.7 USER ACTION — Workers Custom Domain (the destructive step)
+
+In the Cloudflare dashboard:
+
+1. Workers & Pages → `sports` worker → Settings → Domains &
+   Routes → Add → Custom Domain
+2. Domain: `sports.unseen-university.org`
+3. Click Add. CF auto-provisions the cert.
+
+Within ~30 seconds, `sports.unseen-university.org` starts
+routing to the Worker. The existing DNS A record is shadowed
+by the Custom Domain (still in place but unused).
+
+> **DESTRUCTIVE STEP**: confirm before clicking Add. Rollback
+> = remove the Custom Domain in the same dashboard pane.
+> ~30 seconds to apply.
+
+##### 2H.8 Post-cutover smoke
+
+```
+# Worker is the origin now — verify cf-ray header indicates Worker
+curl -sI https://sports.unseen-university.org/cfb/glossary | grep -iE "server|x-powered|cf-ray|server-timing"
+
+# Real game data flows
+curl -s https://sports.unseen-university.org/cfb/game/401520434 | grep -c "Win Probability"
+
+# Asset serving still works
+curl -sI https://sports.unseen-university.org/assets/js/dashboard.js | grep -iE "HTTP|cf-cache"
+
+# Worker route doesn't shadow the python subdomain (sanity)
+curl -sI https://python.unseen-university.org/cfb/process | head -1   # expect 403
+```
+
+##### 2H.9 Burn-in + cleanup (24-48h)
+
+- ☐ Monitor Workers Logs for `event: schema_validation_failure`
+  lines (none expected) and the `event: request` cadence.
+- ☐ Watch CF Web Analytics for error-rate spikes.
+- ☐ After 48h clean, stop the Express container:
+  ```
+  ssh root@<droplet> 'cd /opt/game-on-paper && docker compose stop frontend'
+  ```
+  Keep Python + Redis + Caddy. Don't `rm` the frontend container
+  yet — leave it stopped for a week as a paranoid rollback option.
+- ☐ After 1 week clean, encode the cutover in `wrangler.toml`:
+  ```
+  [[routes]]
+  pattern = "sports.unseen-university.org/*"
+  zone_name = "unseen-university.org"
+  ```
+  This locks the route into the wrangler config so future
+  `wrangler deploy` invocations confirm it's still there.
+- ☐ Optionally update `.github/workflows/fork-deploy.yml` to
+  stop deploying the frontend container.
+
+##### 2H rollback runbook
+
+If anything looks broken after the Custom Domain flip:
+
+1. Cloudflare dashboard → Workers → `sports` → Domains & Routes
+   → click trash on the `sports.unseen-university.org` Custom
+   Domain.
+2. Within ~30 s, traffic falls back to the existing DNS A
+   record → droplet → Caddy → Express (which is still running).
+3. `curl -I https://sports.unseen-university.org` should now
+   show the Express response (no `cf-worker` header).
+4. Investigate, fix, re-add the Custom Domain when ready.
 
 ### Acceptance
 

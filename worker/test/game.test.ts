@@ -137,6 +137,42 @@ describe("games lib", () => {
       );
     });
 
+    it("sends the X-Worker-Secret header when a secret is provided", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        jsonResponse({
+          plays: [],
+          boxScore: {},
+          box_score: {},
+          header: { competitions: [{ status: { type: { completed: false } } }] },
+          homeTeamId: "61",
+          awayTeamId: "333",
+        }),
+      );
+      await fetchAndShapePBP("https://python.example.com", "401005", "shhhh-its-a-secret");
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+      const headers = new Headers(init.headers as HeadersInit);
+      expect(headers.get("X-Worker-Secret")).toBe("shhhh-its-a-secret");
+      expect(headers.get("Content-Type")).toBe("application/json");
+    });
+
+    it("omits X-Worker-Secret when no secret is provided (back-compat with Docker-internal path)", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        jsonResponse({
+          plays: [],
+          boxScore: {},
+          box_score: {},
+          header: { competitions: [{ status: { type: { completed: false } } }] },
+          homeTeamId: "61",
+          awayTeamId: "333",
+        }),
+      );
+      await fetchAndShapePBP("http://python:7000", "401006");
+      const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+      const headers = new Headers(init.headers as HeadersInit);
+      expect(headers.get("X-Worker-Secret")).toBeNull();
+    });
+
     it("pins the last play's WP after to 1.0 on a completed game where home wins", async () => {
       const pythonResponse = {
         plays: [
