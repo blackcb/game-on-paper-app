@@ -82,20 +82,20 @@ USER ACTION step without confirmation from the user.**
     Express side); structured JSON `{event: "request", ...}` log
     line per response; ajv schema validator on Python responses
     (warn-only); Playwright preview-URL update deferred to 2H.
-  - 2H (cutover): **prep complete 2026-05-03**. Worker sends
-    X-Worker-Secret header, wrangler.toml points at
-    `python.sports.unseen-university.org`, Caddy snippet codified
-    in `caddy/`, fork-deploy.yml renders + ships it on every
-    push (with self-healing conf.d setup so a fresh droplet
-    bootstraps cleanly). User has completed: secret generation,
-    droplet conf.d + import-line setup, GH Actions secret
-    `WORKER_SHARED_SECRET`, CF DNS record for
-    `python.sports.unseen-university.org`, `wrangler secret put`.
-    Pushing this branch is the next move — fork-deploy CI then
-    runs the docker compose deploy + Caddy bring-up
-    automatically. After CI green + smoke against
-    `*.workers.dev` shows real game data, the destructive
-    Custom Domain click in CF dashboard is the final flip.
+  - 2H (cutover): **prep mostly complete 2026-05-03, mid-bring-up**.
+    Worker sends X-Worker-Secret. Hostname picked twice — first
+    `python.sports.unseen-university.org` (failed Universal SSL on
+    edge because Free plan only covers one level deep), then
+    settled on the single-level `python.unseen-university.org`.
+    Caddy snippet codified in `caddy/`, fork-deploy.yml renders
+    + ships it on every push (with self-healing conf.d setup so
+    a fresh droplet bootstraps cleanly). User completed: secret +
+    GH Actions secret + droplet conf.d + Wrangler secret + DNS
+    for `python.unseen-university.org`. Remaining: generate a CF
+    Origin Cert for the new hostname, install on droplet at
+    `/etc/caddy/certs/python-origin.{pem,key}` (see 2H.5b), push
+    (CI deploys the renamed snippet automatically), smoke, then
+    Custom Domain click for the destructive flip.
   - vitest suite: 143 assertions across 12 files, ~5.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
@@ -120,14 +120,24 @@ Container investment now is too speculative. The bridge is
 throwaway; if maintainer says yes we eventually replace it
 with 3B, if they say no we drop the whole thing.
 
-**Phase 2H — all prerequisite USER ACTION steps are done as of
-the 2026-05-03 checkpoint.** Secret generated, GH Actions secret
-set, droplet conf.d + import line in place (now also self-healed
-in CI for any future droplet rebuild), CF DNS record for
-`python.sports.unseen-university.org` added, Wrangler secret
+**Phase 2H — most prerequisite steps done as of the 2026-05-03
+checkpoint.** Secret generated, GH Actions secret set, droplet
+conf.d + import line in place (now also self-healed in CI for
+any future droplet rebuild), CF DNS record for
+`python.unseen-university.org` added, Wrangler secret
 `WORKER_SHARED_SECRET` set on the worker.
 
-Two steps remain:
+One USER ACTION still pending before push:
+
+- **2H.5b — generate + install the Origin Cert for
+  `python.unseen-university.org`.** CF dashboard → SSL/TLS →
+  Origin Server → Create Certificate (hostnames:
+  `python.unseen-university.org`, validity 15 years), then
+  `scp` the .pem and .key to the droplet at
+  `/etc/caddy/certs/python-origin.{pem,key}` (mode 0640, owned
+  by caddy:caddy). See 2H.5b for the exact commands.
+
+Two steps remain after that:
 
 1. **Push the branch** — fork-deploy.yml runs build + python-test
    + docker compose deploy (the new compose binds python:7000 to
@@ -940,7 +950,7 @@ artifact that supports that conversation.
   when it isn't (back-compat for local dev / 3B Container path).
 - ☑ `wrangler.toml` `[vars] PYTHON_BASE_URL` updated from
   `http://python:7000` (Docker-internal) to
-  `https://python.sports.unseen-university.org` (the new Caddy-fronted
+  `https://python.unseen-university.org` (the new Caddy-fronted
   public URL). Comment documents the dev override path
   (`worker/.dev.vars`).
 - ☑ `docker-compose.fork.yml`: `python` service now binds port
@@ -951,14 +961,23 @@ artifact that supports that conversation.
   the port is NOT exposed to the public internet, only the
   loopback — UFW + this binding stack make it host-only.
 
-> **Note on hostname**: `python.sports.unseen-university.org`
-> (under the `sports` subdomain) was chosen instead of
-> `python.unseen-university.org` (apex) because the existing
-> Cloudflare Origin Cert covers `*.sports.unseen-university.org`
-> only — picking a hostname under that wildcard avoids
-> regenerating the cert. If we ever move to the apex, the cert
-> needs to be re-issued via the CF dashboard with
-> `*.unseen-university.org` added to the SANs.
+> **Note on hostname** (decided 2026-05-03 mid-bring-up):
+> Settled on the single-level `python.unseen-university.org`
+> after a brief detour through `python.sports.unseen-university.org`.
+> Two reasons:
+> - **Cloudflare Universal SSL** (free plan) only covers the
+>   apex + ONE level of subdomain. The deeper
+>   `python.sports.unseen-university.org` failed edge TLS
+>   because Universal SSL doesn't reach two levels. Paying for
+>   Advanced Certificate Manager ($10/mo) would have been the
+>   alternative; not worth it for a demo.
+> - The single-level hostname needs its own dedicated CF
+>   Origin Cert (the existing `/etc/caddy/certs/origin.{pem,key}`
+>   only covers `*.sports.unseen-university.org`); generated via
+>   CF dashboard → SSL/TLS → Origin Server → Create Certificate
+>   and installed on the droplet at
+>   `/etc/caddy/certs/python-origin.{pem,key}`. Captured in 2H.4
+>   below.
 
 ##### 2H.2 USER ACTION — generate the shared secret
 
@@ -979,7 +998,7 @@ in both.
 
 ##### 2H.3 Droplet setup for codified Caddy — self-healing in CI
 
-The `caddy/python.sports.unseen-university.org.caddy` snippet ships
+The `caddy/python.unseen-university.org.caddy` snippet ships
 through the existing fork-deploy.yml workflow. The workflow's
 "Render + install Caddy snippets" step runs these two idempotent
 commands at the top of every deploy, so a fresh droplet
@@ -1023,14 +1042,14 @@ In the fork repo's GitHub settings:
 
 After this lands, the next push to
 `instrument-plus-cloudflare-cdn` triggers the deploy workflow,
-which renders `caddy/python.sports.unseen-university.org.caddy` with
+which renders `caddy/python.unseen-university.org.caddy` with
 `${WORKER_SHARED_SECRET}` substituted in, scp's it to
 `/etc/caddy/conf.d/` on the droplet, validates, and reloads
 Caddy. No more SSH-and-edit.
 
 > **USER ACTION**: Add the GitHub Actions secret.
 
-##### 2H.5 USER ACTION — Cloudflare DNS: add python.sports.unseen-university.org
+##### 2H.5 USER ACTION — Cloudflare DNS: add python.unseen-university.org
 
 In the Cloudflare dashboard for `unseen-university.org`:
 
@@ -1047,6 +1066,40 @@ UFW on the droplet is already locked to Cloudflare IPs
 automatically inherits the firewall posture.
 
 > **USER ACTION**: Add the DNS record in the CF dashboard.
+
+##### 2H.5b USER ACTION — Cloudflare Origin Cert + install on droplet
+
+The new hostname needs its own Origin Cert because the existing
+`/etc/caddy/certs/origin.{pem,key}` only covers the `sports`
+subdomain. CF Origin Certs are free, 15-year, signed by CF's
+internal CA (which CF's edge proxy trusts).
+
+1. CF dashboard → SSL/TLS → Origin Server → Create Certificate.
+   - Hostnames: `python.unseen-university.org`
+   - Validity: 15 years (default)
+   - Click Create. Copy the cert + key into local files (e.g.
+     `~/Downloads/python-origin.pem`, `~/Downloads/python-origin.key`).
+2. Install on the droplet from your laptop:
+
+   ```
+   scp ~/Downloads/python-origin.pem deploy@137.184.138.84:/tmp/
+   scp ~/Downloads/python-origin.key deploy@137.184.138.84:/tmp/
+   ssh deploy@137.184.138.84 'sudo install -o caddy -g caddy -m 0640 /tmp/python-origin.pem /etc/caddy/certs/python-origin.pem && \
+                              sudo install -o caddy -g caddy -m 0640 /tmp/python-origin.key /etc/caddy/certs/python-origin.key && \
+                              shred -u /tmp/python-origin.pem /tmp/python-origin.key'
+   ```
+
+   (`shred -u` overwrites then deletes — paranoid but cheap. The
+   files are also still on your laptop in `~/Downloads/` — move
+   to a password manager / secure storage and delete the disk
+   copies after this works.)
+
+The Caddy snippet `caddy/python.unseen-university.org.caddy`
+references these paths in its `tls` directive — once the files
+are in place, the next deploy's `caddy validate` succeeds.
+
+> **USER ACTION**: Generate the cert in CF, scp + install on
+> droplet, clean up the temp files.
 
 ##### 2H.6 USER ACTION — Wrangler secret (one-time, manual)
 
@@ -1166,7 +1219,7 @@ curl -s https://sports.unseen-university.org/cfb/game/401520434 | grep -c "Win P
 curl -sI https://sports.unseen-university.org/assets/js/dashboard.js | grep -iE "HTTP|cf-cache"
 
 # Worker route doesn't shadow the python subdomain (sanity)
-curl -sI https://python.sports.unseen-university.org/cfb/process | head -1   # expect 403
+curl -sI https://python.unseen-university.org/cfb/process | head -1   # expect 403
 ```
 
 ##### 2H.11 Burn-in + cleanup (24-48h)

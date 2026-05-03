@@ -2,7 +2,7 @@
 #
 # The Worker (sports.unseen-university.org, served from CF edge)
 # can't reach the Docker-internal `python:7000` hostname. This vhost
-# exposes /cfb/process publicly at https://python.sports.unseen-university.org,
+# exposes /cfb/process publicly at https://python.unseen-university.org,
 # gated on a shared-secret header so only the Worker can hit it.
 #
 # Source of truth lives in this repo. The fork-deploy.yml workflow
@@ -17,7 +17,7 @@
 # secret put WORKER_SHARED_SECRET`), push to the fork branch — CI
 # does the rest.
 
-python.sports.unseen-university.org {
+python.unseen-university.org {
     # Header matcher: requests must carry X-Worker-Secret with the
     # configured value. The literal string is templated in at deploy
     # time by envsubst, so the file in this repo never carries the
@@ -41,18 +41,23 @@ python.sports.unseen-university.org {
         respond "Forbidden" 403
     }
 
-    # Reuses the Cloudflare Origin Cert from
-    # docs/replica-deploy-plan.md Phase C — it covers
-    # *.sports.unseen-university.org + sports.unseen-university.org,
-    # so this subdomain (python.sports.unseen-university.org) is
-    # automatically in scope under the wildcard without re-issuing
-    # the cert. Hostname intentionally chosen to fit the existing
-    # cert; if we ever move to python.unseen-university.org the cert
-    # has to be regenerated.
+    # Dedicated Cloudflare Origin Cert for python.unseen-university.org,
+    # generated via CF dashboard → SSL/TLS → Origin Server → Create
+    # Certificate. Files installed on the droplet at
+    # /etc/caddy/certs/python-origin.{pem,key} as a one-time setup.
     #
-    # Cert path matches the existing sports.unseen-university.org
-    # block in /etc/caddy/Caddyfile (`/etc/caddy/certs/origin.{pem,key}`).
-    tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
+    # Why a separate cert (vs the existing /etc/caddy/certs/origin.{pem,key}
+    # used by the sports vhost): that cert covers
+    # *.sports.unseen-university.org + sports.unseen-university.org and
+    # doesn't include python.unseen-university.org. Two-level deep names
+    # like python.sports.unseen-university.org would have been covered by
+    # that cert, but Cloudflare's free Universal SSL only covers ONE level
+    # of subdomain on the edge — so any two-level deep name fails edge
+    # TLS unless you pay for Advanced Certificate Manager. Using a
+    # single-level subdomain (python.unseen-university.org) lets
+    # Universal SSL handle the edge and a small dedicated origin cert
+    # handle the origin.
+    tls /etc/caddy/certs/python-origin.pem /etc/caddy/certs/python-origin.key
 
     # Access logs flow through Caddy's default output (stderr →
     # systemd journal) so we don't have to provision and chown a
@@ -60,7 +65,7 @@ python.sports.unseen-university.org {
     # existing sports.unseen-university.org block doesn't have
     # an explicit log directive either, so /var/log/caddy/ may
     # not exist on the droplet). Filter via:
-    #   journalctl -u caddy -f | jq 'select(.request.host == "python.sports.unseen-university.org")'
+    #   journalctl -u caddy -f | jq 'select(.request.host == "python.unseen-university.org")'
     log {
         format json
     }

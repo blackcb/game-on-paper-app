@@ -158,7 +158,7 @@ jobs:
             docker compose ps
 
       # Sub-phase 2H: ship the Caddy snippet that exposes Python at
-      # https://python.sports.unseen-university.org for the Cloudflare Worker.
+      # https://python.unseen-university.org for the Cloudflare Worker.
       # Only runs after the docker compose deploy succeeds — Caddy
       # `reverse_proxy python:7000` would 502 if Python isn't up.
       #
