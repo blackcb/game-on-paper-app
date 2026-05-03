@@ -84,7 +84,7 @@ USER ACTION step without confirmation from the user.**
     (warn-only); Playwright preview-URL update deferred to 2H.
   - 2H (cutover): **prep code shipped 2026-05-03** (Worker
     sends X-Worker-Secret header, wrangler.toml points at
-    `python.unseen-university.org`). Awaiting USER ACTION:
+    `python.sports.unseen-university.org`). Awaiting USER ACTION:
     secret generation, Caddyfile edit on droplet, CF DNS
     record, `wrangler secret put`, and the Custom Domain
     click. Step-by-step runbook in the 2H section below.
@@ -112,7 +112,7 @@ throwaway; if maintainer says yes we eventually replace it
 with 3B, if they say no we drop the whole thing.
 
 **Phase 2H runbook is in the 2H section below.** The Caddy
-config is now codified in `caddy/python.unseen-university.org.caddy`
+config is now codified in `caddy/python.sports.unseen-university.org.caddy`
 and ships through the existing fork-deploy.yml workflow — no
 more SSH-and-edit. Steps remaining for the user:
 
@@ -924,9 +924,25 @@ artifact that supports that conversation.
   when it isn't (back-compat for local dev / 3B Container path).
 - ☑ `wrangler.toml` `[vars] PYTHON_BASE_URL` updated from
   `http://python:7000` (Docker-internal) to
-  `https://python.unseen-university.org` (the new Caddy-fronted
+  `https://python.sports.unseen-university.org` (the new Caddy-fronted
   public URL). Comment documents the dev override path
   (`worker/.dev.vars`).
+- ☑ `docker-compose.fork.yml`: `python` service now binds port
+  7000 to `127.0.0.1:7000` on the host in addition to the
+  Docker-internal `expose`. Lets the host's systemd-managed
+  Caddy `reverse_proxy 127.0.0.1:7000` reach Python without
+  joining the compose network. The `127.0.0.1:` prefix means
+  the port is NOT exposed to the public internet, only the
+  loopback — UFW + this binding stack make it host-only.
+
+> **Note on hostname**: `python.sports.unseen-university.org`
+> (under the `sports` subdomain) was chosen instead of
+> `python.unseen-university.org` (apex) because the existing
+> Cloudflare Origin Cert covers `*.sports.unseen-university.org`
+> only — picking a hostname under that wildcard avoids
+> regenerating the cert. If we ever move to the apex, the cert
+> needs to be re-issued via the CF dashboard with
+> `*.unseen-university.org` added to the SANs.
 
 ##### 2H.2 USER ACTION — generate the shared secret
 
@@ -947,7 +963,7 @@ in both.
 
 ##### 2H.3 USER ACTION — one-time droplet setup for codified Caddy
 
-The `caddy/python.unseen-university.org.caddy` snippet ships
+The `caddy/python.sports.unseen-university.org.caddy` snippet ships
 through the existing fork-deploy.yml workflow. The deploy step
 expects two things to already exist on the droplet:
 
@@ -992,14 +1008,14 @@ In the fork repo's GitHub settings:
 
 After this lands, the next push to
 `instrument-plus-cloudflare-cdn` triggers the deploy workflow,
-which renders `caddy/python.unseen-university.org.caddy` with
+which renders `caddy/python.sports.unseen-university.org.caddy` with
 `${WORKER_SHARED_SECRET}` substituted in, scp's it to
 `/etc/caddy/conf.d/` on the droplet, validates, and reloads
 Caddy. No more SSH-and-edit.
 
 > **USER ACTION**: Add the GitHub Actions secret.
 
-##### 2H.5 USER ACTION — Cloudflare DNS: add python.unseen-university.org
+##### 2H.5 USER ACTION — Cloudflare DNS: add python.sports.unseen-university.org
 
 In the Cloudflare dashboard for `unseen-university.org`:
 
@@ -1135,7 +1151,7 @@ curl -s https://sports.unseen-university.org/cfb/game/401520434 | grep -c "Win P
 curl -sI https://sports.unseen-university.org/assets/js/dashboard.js | grep -iE "HTTP|cf-cache"
 
 # Worker route doesn't shadow the python subdomain (sanity)
-curl -sI https://python.unseen-university.org/cfb/process | head -1   # expect 403
+curl -sI https://python.sports.unseen-university.org/cfb/process | head -1   # expect 403
 ```
 
 ##### 2H.11 Burn-in + cleanup (24-48h)

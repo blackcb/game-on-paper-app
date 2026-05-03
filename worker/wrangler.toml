@@ -70,7 +70,7 @@ binding = "SUMMARY_LAST_UPDATED"
 id = "564be97a4ca8419a9ccdc8b0be0f1c3d"
 
 # Python service URL for /cfb/process. Sub-phase 2H exposes Python
-# publicly via Caddy on the droplet at https://python.unseen-university.org,
+# publicly via Caddy on the droplet at https://python.sports.unseen-university.org,
 # gated on a shared-secret header (X-Worker-Secret) the Worker
 # sends from c.env.WORKER_SHARED_SECRET. The secret itself lives
 # outside this file — set via `wrangler secret put WORKER_SHARED_SECRET`
@@ -87,4 +87,4 @@ id = "564be97a4ca8419a9ccdc8b0be0f1c3d"
 # Docker-internal http://python:7000 — that's not this Worker's
 # concern, that's the Express stack's own config.
 [vars]
-PYTHON_BASE_URL = "https://python.unseen-university.org"
+PYTHON_BASE_URL = "https://python.sports.unseen-university.org"

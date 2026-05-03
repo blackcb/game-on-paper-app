@@ -95,6 +95,17 @@ services:
     image: ghcr.io/blackcb/game-on-paper-experiment/python:latest
     expose:
       - 7000
+    # Sub-phase 2H: also bind 7000 to the host's loopback so
+    # the host's systemd-managed Caddy can reverse_proxy to
+    # 127.0.0.1:7000 and front Python at
+    # https://python.sports.unseen-university.org for the
+    # Cloudflare Worker. UFW + the 127.0.0.1 prefix together
+    # mean nothing public can reach Python directly — only
+    # Caddy can, and Caddy enforces the X-Worker-Secret header.
+    # Goes away when Phase 3B moves Python to a Cloudflare
+    # Container.
+    ports:
+      - "127.0.0.1:7000:7000"
     healthcheck:
       test: curl --fail http://python:7000/healthcheck || exit 1
       interval: 60s

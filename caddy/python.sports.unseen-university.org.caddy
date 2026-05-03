@@ -2,7 +2,7 @@
 #
 # The Worker (sports.unseen-university.org, served from CF edge)
 # can't reach the Docker-internal `python:7000` hostname. This vhost
-# exposes /cfb/process publicly at https://python.unseen-university.org,
+# exposes /cfb/process publicly at https://python.sports.unseen-university.org,
 # gated on a shared-secret header so only the Worker can hit it.
 #
 # Source of truth lives in this repo. The fork-deploy.yml workflow
@@ -17,19 +17,21 @@
 # secret put WORKER_SHARED_SECRET`), push to the fork branch — CI
 # does the rest.
 
-python.unseen-university.org {
+python.sports.unseen-university.org {
     # Header matcher: requests must carry X-Worker-Secret with the
     # configured value. The literal string is templated in at deploy
     # time by envsubst, so the file in this repo never carries the
     # actual secret.
     @worker_auth header X-Worker-Secret ${WORKER_SHARED_SECRET}
 
-    # Authorized requests proxy to the Python container on the
-    # Docker-internal network. Caddy resolves `python` via Docker's
-    # DNS because the Caddy systemd service runs on the same host
-    # as the Docker daemon.
+    # Authorized requests proxy to the Python container.
+    # The Python service binds port 7000 to 127.0.0.1 in
+    # docker-compose.fork.yml so it's reachable from the host
+    # (where systemd-managed Caddy runs) without being exposed
+    # to the public internet — and the X-Worker-Secret check
+    # above already gates anyone who reaches Caddy.
     handle @worker_auth {
-        reverse_proxy python:7000
+        reverse_proxy 127.0.0.1:7000
     }
 
     # Anything else (no header, wrong header) gets a flat 403 with
@@ -41,8 +43,12 @@ python.unseen-university.org {
 
     # Reuses the Cloudflare Origin Cert from
     # docs/replica-deploy-plan.md Phase C — it covers
-    # *.unseen-university.org so this subdomain is automatically in
-    # scope without re-issuing.
+    # *.sports.unseen-university.org + sports.unseen-university.org,
+    # so this subdomain (python.sports.unseen-university.org) is
+    # automatically in scope under the wildcard without re-issuing
+    # the cert. Hostname intentionally chosen to fit the existing
+    # cert; if we ever move to python.unseen-university.org the cert
+    # has to be regenerated.
     tls /etc/caddy/origin.pem /etc/caddy/origin.key
 
     # Separate access log for forensics on the Python boundary
