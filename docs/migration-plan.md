@@ -62,30 +62,43 @@ USER ACTION step without confirmation from the user.**
     auto-recover. `c.executionCtx.waitUntil(cache.put(...))` for
     fire-and-forget writes. Production smoke confirmed
     `cf-cache-status: HIT` on second hit for quarantine + pregame.
-  - 2E (assets) / 2F (cron) / 2H (cutover): not started
+  - 2E (assets): **completed 2026-05-03**. `worker/public/`
+    populated from the legacy `frontend/public/` (9.6 MB, 1424
+    files) and exposed via the `[assets] directory = "./public"`
+    binding. WP/EP/field charts now resolve their script tags
+    against the deployed Worker. Hashed-filename + 1-year
+    `/assets/*` cache rule deferred to a follow-on cleanup pass.
+  - 2F (cron) / 2H (cutover): not started
   - 2G (tests): 128 vitest assertions, ~2.7 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-03 (Phase 2D — Cache API for per-game PBP
-  completed; sub-phase 2D is now done end-to-end)
+- Last updated: 2026-05-03 (Phase 2E — Workers Static Assets
+  binding completed; `/assets/*` now serves from the Worker)
 
 ### Next session entry point
 
-Mid-day stop on 2026-05-03. Branch `instrument-plus-cloudflare-cdn`,
-two commits ahead of the prior checkpoint: 2B full template port
-(`6f14837`) and 2D Cache API. Working tree clean once 2D is
-committed.
+Late-day stop on 2026-05-03. Branch `instrument-plus-cloudflare-cdn`,
+three commits ahead of the prior checkpoint: 2B full template port
+(`6f14837`), 2D Cache API (`4dda877`), and 2E static assets.
+Working tree clean once 2E is committed.
 
-**Phase 2D is complete.** Pick up at sub-phase **2E — Static
-assets**. Move `frontend/public/*` to `worker/public/*`, add the
-`[assets]` binding to `wrangler.toml`, and verify the WP/EP and
-field charts actually render against the deployed Worker (the
-JSON-island pattern is wired up but `/assets/js/*` 404s today).
-Optional follow-on inside 2E: hash filenames so the Phase 0
-1-hour `/assets/*` cache rule can be bumped to 1 year `immutable`.
+**Phase 2E is complete.** Pick up at sub-phase **2F — Cron-warmed
+scoreboard**. Add a `[triggers] crons = ["* * * * *"]` to
+`wrangler.toml`, implement a `scheduled` handler that fetches the
+ESPN scoreboard and writes to KV with key `cfb-scoreboard`, and
+make the user-facing `/cfb/` route read from KV first. Optional:
+season-window guard (skip cron Aug 20 – Jan 20).
 
-After 2E: 2F (cron-warmed scoreboard, ESPN scoreboard fetched
-every minute and written to KV; user routes read from KV first).
+After 2F: 2H (parallel deploy + DNS cutover) is the natural next
+step — the only remaining gap is the Python proxy (`PYTHON_BASE_URL`
+points at the Docker-internal `http://python:7000` and won't
+resolve from CF edge). Cutover plan resolves this either by (a)
+swapping in a publicly-reachable Python URL on the droplet or (b)
+moving Python into a Cloudflare Container per Phase 3B.
+
+The hashed-filename cleanup + Phase 0 cache-rule bump from 2E is
+deferred but recommended before 2H so cutover lands with browser
+caching tuned.
 
 Sanity before starting:
 ```
@@ -742,24 +755,39 @@ For each route:
 
 #### 2E — Static assets
 
-Two options, pick one:
+**Option A picked** (Workers Static Assets binding) — simpler than
+Pages and avoids a second deploy artifact.
 
-- **Option A (recommended)**: Workers Static Assets binding. Simpler — one
-  Worker, one deploy.
-  - ☐ Move `frontend/public/*` to `worker/public/*`.
-  - ☐ Add `[assets] directory = "./public"` to `wrangler.toml`.
-  - ☐ Reference assets as normal `/assets/...` paths; Worker serves them
-    automatically with proper Content-Type.
-- **Option B**: Cloudflare Pages for static assets, Worker for routes.
-  More moving parts; only choose if you want CI/CD per-PR previews
-  separately for assets.
-
-- ☐ Either way, hash filenames (e.g. via a simple build script or
-  `vite-plugin-cloudflare`) so the Phase 0 1-hour cache TTL can be bumped
-  to 1 year `immutable`.
-- ☐ Update Phase 0 Cache Rule for `/assets/*` to **Edge TTL 1 year, Browser
-  TTL 1 year**.
-- ☐ Replace asset references in templates with hashed filenames.
+- ☑ Move `frontend/public/*` to `worker/public/*`. **Done
+  2026-05-03.** Used `cp -r` rather than `git mv` because the
+  legacy Express stack on the DO droplet still serves these
+  files until the Phase 2H cutover; after Phase 3E (droplet
+  decommission) `frontend/public/` can go away and `worker/public/`
+  becomes the only copy. 9.6 MB / 1424 files (1371 of which are
+  bootstrap-icons SVGs — well within the 20k-file limit).
+- ☑ Add `[assets] directory = "./public"` to `wrangler.toml`.
+  **Done 2026-05-03.** Default routing serves assets first, falls
+  through to the Worker for misses; no `binding` because the
+  Worker doesn't need to call `env.ASSETS.fetch` itself.
+- ☑ Reference assets as normal `/assets/...` paths; Worker serves
+  them automatically with proper Content-Type. **Done implicitly**
+  — every Worker template already references `/assets/...` paths;
+  no template change needed for the binding to take effect.
+- ◐ Hash filenames (e.g. via a simple build script or
+  `vite-plugin-cloudflare`) so the Phase 0 1-hour cache TTL can
+  be bumped to 1 year `immutable`. **Deferred.** Workers Static
+  Assets already serves immutable content at edge with default
+  caching (cf-cache-status: HIT on first hit), so the immediate
+  perf cost of skipping this is zero. The win is on browser
+  caching: hashed filenames let us set Browser TTL to 1 year
+  knowing that any change will get a new URL. Worth doing
+  before sub-phase 2H cutover but not blocking. Tracked as a
+  follow-on cleanup pass.
+- ◐ Update Phase 0 Cache Rule for `/assets/*` to **Edge TTL 1 year,
+  Browser TTL 1 year**. Deferred with the hashing task above —
+  the two move together.
+- ◐ Replace asset references in templates with hashed filenames.
+  Deferred with hashing task.
 
 #### 2F — Cron-warmed scoreboard
 
@@ -1023,6 +1051,63 @@ directory = "./public"` to `wrangler.toml`, verify the
 WP/EP/field charts render. The hashed-filename + 1-year
 `/assets/*` cache-rule bump can either land in 2E or be
 deferred to a later cleanup pass.
+
+#### 2E Workers Static Assets binding (2026-05-03)
+
+`worker/public/` populated from `frontend/public/` via `cp -r`
+(9.6 MB, 1424 files; 1371 of those are bootstrap-icons SVGs).
+`wrangler.toml` got a single new block:
+
+```toml
+[assets]
+directory = "./public"
+```
+
+No `binding` / `not_found_handling` because:
+- The Worker doesn't need to call `env.ASSETS.fetch` itself —
+  the runtime serves assets transparently first and falls
+  through to the Worker handler on misses (the documented
+  default when `run_worker_first` is unset).
+- We don't want SPA-style `/foo` → `/index.html` rewriting; the
+  default null fallback for asset misses lets the Worker handle
+  every dynamic route as it did before.
+
+No template changes required — every Worker template already
+references `/assets/...` paths in `extraHead` / `extraScripts` /
+inline `<link>` tags from the EJS port. Wrangler diffed and
+uploaded only 1422 files (2 were already in CF's content-addressed
+asset store, dedup'd by hash).
+
+Production smoke (`sports.unseen-university.workers.dev`):
+
+| Path | HTTP | content-type | cf-cache-status |
+|---|---|---|---|
+| `/assets/js/dashboard.js` | 200 | `text/javascript` | HIT |
+| `/assets/css/index.css` | 200 | `text/css` | HIT |
+| `/robots.txt` | 200 | `text/plain` | HIT |
+| `/assets/img/favicon.ico` | 200 | `image/vnd.microsoft.icon` | (not set; first hit) |
+| `/cfb/glossary` | 200 | `text/html; charset=UTF-8` | (Worker route, not asset) |
+
+Notes:
+- `cf-cache-status: HIT` on the *first* curl after deploy
+  because Workers Static Assets are pre-populated to edge on
+  upload. This is the headline 2E win — no origin trip on any
+  asset request.
+- Game route still serves the GameError template for
+  non-quarantined real game IDs (Python is unreachable from CF
+  edge — same posture as the prior commits; resolves at 2H or
+  3B). The error template's `<link>`/`<script>` tags now
+  resolve correctly though, so the chrome renders fully even
+  on the error page.
+- Hashed-filename cleanup + Phase 0 cache-rule bump
+  (`/assets/*` → 1 year browser TTL, `immutable`) intentionally
+  deferred. Worth doing before sub-phase 2H cutover so browser
+  caching is tuned, but skipping it costs zero today (edge
+  caching is already 1 hour from the Phase 0 rule, and Workers
+  Static Assets handles edge dedup transparently).
+
+**Resume hint**: pick up at sub-phase **2F — Cron-warmed
+scoreboard**.
 
 #### 2A scaffolding (2026-05-02)
 
