@@ -139,20 +139,45 @@ async function renderScoreboard(
     opts.year == null &&
     opts.week == null &&
     parseInt(String(group), 10) === 80;
-  let games: ScheduleEvent[];
-  if (isDefaultCurrent) {
-    games = await time(c, "espn_scoreboard", () =>
-      getCachedCurrentScoreboard(c.env.LEAGUE_DATA),
-    );
-  } else {
-    games = await time(c, "espn_scoreboard", () =>
-      getGames({
+  // ESPN's historical schedule endpoint (cdn.espn.com/.../schedule)
+  // hands out 503s and HTML-instead-of-JSON often enough that
+  // letting them surface as 5xxs to the user is the wrong default.
+  // Catch and render the empty-state ("No games scheduled.") so a
+  // transient ESPN hiccup looks like a quiet day instead of a
+  // broken site. The structured log line gives forensics for when
+  // someone reports a blank scoreboard. The bare /cfb/ path
+  // (isDefaultCurrent) is mostly insulated by KV cache from
+  // getCachedCurrentScoreboard, but the same catch applies for
+  // the case where KV is also cold (off-season, fresh deploy).
+  let games: ScheduleEvent[] = [];
+  try {
+    if (isDefaultCurrent) {
+      games = await time(c, "espn_scoreboard", () =>
+        getCachedCurrentScoreboard(c.env.LEAGUE_DATA),
+      );
+    } else {
+      games = await time(c, "espn_scoreboard", () =>
+        getGames({
+          year: opts.year,
+          week: opts.week,
+          type: opts.seasontype,
+          group,
+        }),
+      );
+    }
+  } catch (err) {
+    console.log(
+      JSON.stringify({
+        event: "espn_scoreboard_failure",
         year: opts.year,
         week: opts.week,
         type: opts.seasontype,
         group,
+        error: (err as Error).message,
       }),
     );
+    // games stays []; the template renders the "No games
+    // scheduled." path.
   }
   const scoreboard = prepareGameList(games);
   return c.html(

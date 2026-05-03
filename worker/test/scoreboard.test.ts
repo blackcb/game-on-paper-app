@@ -348,7 +348,10 @@ describe("/cfb/year/:year/type/:type/week/:week", () => {
     expect(url).toContain("type=2");
   });
 
-  it("rejects HTML responses from ESPN as malformed", async () => {
+  it("treats HTML responses from ESPN as a soft failure (200 + empty state)", async () => {
+    // ESPN sometimes serves HTML error pages instead of JSON.
+    // fetchHistoricalSchedule throws; the route catches and renders
+    // the "No games scheduled." state. Pre-2H.10d this returned 500.
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response("<html><body>error</body></html>", {
@@ -356,7 +359,31 @@ describe("/cfb/year/:year/type/:type/week/:week", () => {
         }),
     );
     const res = await SELF.fetch("http://localhost/cfb/year/2024/type/2/week/2");
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("No games scheduled.");
+  });
+
+  it("treats ESPN 503 as a soft failure (200 + empty state)", async () => {
+    // The actual user-reported case: cdn.espn.com returns 503 on the
+    // historical schedule endpoint occasionally. Should NOT 500 the
+    // user; render the empty-state instead.
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () => new Response("upstream busy", { status: 503 }),
+    );
+    const res = await SELF.fetch("http://localhost/cfb/year/2016/type/2/week/6");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("No games scheduled.");
+    // Structured failure log emitted for forensics.
+    const failureLines = logSpy.mock.calls
+      .map((c) => String(c[0] ?? ""))
+      .filter((line) => line.includes('"event":"espn_scoreboard_failure"'));
+    expect(failureLines.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(failureLines[0]) as Record<string, unknown>;
+    expect(parsed.year).toBe("2016");
+    expect(parsed.week).toBe("6");
   });
 });
 
