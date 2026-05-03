@@ -202,14 +202,20 @@ jobs:
             # Self-heal the one-time droplet setup so a fresh
             # provision (replica-deploy-plan.md Phase A → push
             # this branch) doesn't require manual SSH for the
-            # 2H bring-up. Both commands are idempotent: mkdir
-            # -p is a no-op if the dir exists, and `grep -q ||`
-            # only appends the import line if it isn't already
-            # present.
+            # 2H bring-up. Idempotent: mkdir -p is a no-op if
+            # the dir exists; the sed removes any existing
+            # `import .*conf.d` lines (handles the prior
+            # `grep -q 'import conf.d'` bug that left
+            # duplicates) and the tee re-adds exactly one.
+            # Net effect on a healthy config: still exactly one
+            # import line. Net effect on a broken config:
+            # collapsed back to one line. Net effect on a
+            # virgin droplet: import line is added.
             sudo mkdir -p /etc/caddy/conf.d
-            sudo grep -q 'import conf.d' /etc/caddy/Caddyfile \
-              || echo 'import /etc/caddy/conf.d/*.caddy' \
-                 | sudo tee -a /etc/caddy/Caddyfile > /dev/null
+            sudo sed -i -E '/^import[[:space:]]+\/etc\/caddy\/conf\.d\/\*\.caddy$/d' \
+              /etc/caddy/Caddyfile
+            echo 'import /etc/caddy/conf.d/*.caddy' \
+              | sudo tee -a /etc/caddy/Caddyfile > /dev/null
             for src in /tmp/caddy-stage/*.caddy; do
               name=$(basename "$src")
               # envsubst rendered as the deploy user; sudo install
