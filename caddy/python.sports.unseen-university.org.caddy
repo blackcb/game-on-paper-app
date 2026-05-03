@@ -49,7 +49,10 @@ python.sports.unseen-university.org {
     # the cert. Hostname intentionally chosen to fit the existing
     # cert; if we ever move to python.unseen-university.org the cert
     # has to be regenerated.
-    tls /etc/caddy/origin.pem /etc/caddy/origin.key
+    #
+    # Cert path matches the existing sports.unseen-university.org
+    # block in /etc/caddy/Caddyfile (`/etc/caddy/certs/origin.{pem,key}`).
+    tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
 
     # Separate access log for forensics on the Python boundary
     # specifically (volume should be tiny — only the Worker hits
