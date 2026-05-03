@@ -2,10 +2,18 @@
 // frontend/cfb/routes.js (`retrieveLeagueData`, `retrieveLastUpdated`,
 // the `retrieveRemote*` family) with KV-backed equivalents. KV writes
 // use `expirationTtl` to match the Express side's 3-day TTL.
+//
+// Sub-phase 2H follow-up (2026-05-03): the summary service used to be
+// reachable at the Docker-internal `http://summary:3000` from inside
+// the Express container's compose network. Post-cutover the Worker
+// runs at CF edge and can't resolve that hostname. Same fix shape as
+// Python (lib/games.ts): expose summary publicly via Caddy on the
+// droplet at `https://summary.unseen-university.org`, gated on the
+// shared `X-Worker-Secret` header. Each `retrieve*` function now
+// takes a SummaryConfig (kv + base URL + secret) so the URL is
+// passed in by the route handler from c.env rather than hardcoded.
 
 import { MIN_SEASON } from "./season";
-
-const SUMMARY_BASE = "http://summary:3000";
 
 // Three-day TTL on summary data — matches frontend/cfb/routes.js's
 // `EX: 60 * 60 * 24 * 3` on every redisClient.set.
@@ -16,6 +24,17 @@ const TTL_SECONDS = 60 * 60 * 24 * 3;
 // summary-service hiccup amplified into a 10s page load that
 // saturated the summary container.
 const REMOTE_YEAR_RETRY_BUDGET = 2;
+
+// Bundles everything the retrieve* helpers need: the KV namespace
+// holding the cached results, the public summary base URL, and the
+// shared secret to prove the request originated from the Worker.
+// Built once per request by the route handler from c.env (see
+// summaryCfg() / lastUpdatedCfg() in index.tsx).
+export interface SummaryConfig {
+  kv: KVNamespace;
+  base: string;
+  secret?: string | null;
+}
 
 export interface TeamLeagueRow {
   teamId: number | string;
@@ -36,11 +55,20 @@ interface LastUpdatedResponse {
   last_updated: string;
 }
 
-async function postSummaryForm(payload: Record<string, string>): Promise<TeamLeagueRow[]> {
+function authHeaders(secret: string | null | undefined, extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  if (secret) headers["X-Worker-Secret"] = secret;
+  return headers;
+}
+
+async function postSummaryForm(
+  cfg: SummaryConfig,
+  payload: Record<string, string>,
+): Promise<TeamLeagueRow[]> {
   const body = new URLSearchParams(payload);
-  const response = await fetch(`${SUMMARY_BASE}/`, {
+  const response = await fetch(`${cfg.base}/`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: authHeaders(cfg.secret, { "Content-Type": "application/x-www-form-urlencoded" }),
     body,
   });
   if (!response.ok) {
@@ -51,14 +79,14 @@ async function postSummaryForm(payload: Record<string, string>): Promise<TeamLea
 }
 
 async function fetchRemoteLeagueData(
-  kv: KVNamespace,
+  cfg: SummaryConfig,
   year: number,
   type: string,
   retriesRemaining = REMOTE_YEAR_RETRY_BUDGET,
 ): Promise<TeamLeagueRow[]> {
   try {
-    const content = await postSummaryForm({ year: String(year), type });
-    await kv.put(`${year}-${type}`, JSON.stringify(content), {
+    const content = await postSummaryForm(cfg, { year: String(year), type });
+    await cfg.kv.put(`${year}-${type}`, JSON.stringify(content), {
       expirationTtl: TTL_SECONDS,
     });
     return content;
@@ -69,19 +97,19 @@ async function fetchRemoteLeagueData(
     if (retriesRemaining <= 0 || year - 1 < MIN_SEASON) {
       return [];
     }
-    return fetchRemoteLeagueData(kv, year - 1, type, retriesRemaining - 1);
+    return fetchRemoteLeagueData(cfg, year - 1, type, retriesRemaining - 1);
   }
 }
 
 // KV-first reader. Cache miss falls back to the summary service via
 // fetchRemoteLeagueData, which writes through to KV on success.
 export async function retrieveLeagueData(
-  kv: KVNamespace,
+  cfg: SummaryConfig,
   year: number,
   type: string,
 ): Promise<TeamLeagueRow[]> {
   const key = `${year}-${type}`;
-  const cached = await kv.get(key);
+  const cached = await cfg.kv.get(key);
   if (cached) {
     try {
       return JSON.parse(cached) as TeamLeagueRow[];
@@ -91,7 +119,7 @@ export async function retrieveLeagueData(
       // retrieveRemoteLeagueData.
     }
   }
-  return fetchRemoteLeagueData(kv, year, type);
+  return fetchRemoteLeagueData(cfg, year, type);
 }
 
 // Percentile rows. Schema is summary-service-defined, fields vary by
@@ -103,14 +131,16 @@ export interface PercentileRow {
 }
 
 async function fetchRemotePercentiles(
-  kv: KVNamespace,
+  cfg: SummaryConfig,
   year: number | null,
   pctile: number | null,
 ): Promise<PercentileRow[]> {
   const params = new URLSearchParams();
   if (year != null) params.set("year", String(year));
   if (pctile != null) params.set("pctile", String(pctile));
-  const response = await fetch(`${SUMMARY_BASE}/percentiles?${params}`);
+  const response = await fetch(`${cfg.base}/percentiles?${params}`, {
+    headers: authHeaders(cfg.secret),
+  });
   if (!response.ok) {
     throw new Error(`summary /percentiles returned ${response.status}`);
   }
@@ -120,7 +150,7 @@ async function fetchRemotePercentiles(
   // with empty segments for null inputs filtered by generateKey.
   const keyParts = [year, "percentiles", pctile].filter((p) => p != null);
   if (keyParts.length > 0) {
-    await kv.put(keyParts.join("-"), JSON.stringify(content), {
+    await cfg.kv.put(keyParts.join("-"), JSON.stringify(content), {
       expirationTtl: TTL_SECONDS,
     });
   }
@@ -132,14 +162,14 @@ async function fetchRemotePercentiles(
 // be provided — calling with both null returns []. The trends route
 // calls this 5x with year=null, pctile=0.01/0.25/0.5/0.75/0.99.
 export async function retrievePercentiles(
-  kv: KVNamespace,
+  cfg: SummaryConfig,
   year: number | null,
   pctile: number | null,
 ): Promise<PercentileRow[]> {
   if (year == null && pctile == null) return [];
   const keyParts = [year, "percentiles", pctile].filter((p) => p != null);
   const key = keyParts.join("-");
-  const cached = await kv.get(key);
+  const cached = await cfg.kv.get(key);
   if (cached) {
     try {
       return JSON.parse(cached) as PercentileRow[];
@@ -148,7 +178,7 @@ export async function retrievePercentiles(
     }
   }
   try {
-    return await fetchRemotePercentiles(kv, year, pctile);
+    return await fetchRemotePercentiles(cfg, year, pctile);
   } catch (err) {
     console.log(
       `summary /percentiles fetch failed for year=${year}, pctile=${pctile}: ${(err as Error).message}`,
@@ -158,7 +188,7 @@ export async function retrievePercentiles(
 }
 
 async function fetchRemoteTeamData(
-  kv: KVNamespace,
+  cfg: SummaryConfig,
   year: number | null,
   teamId: string | number,
   type: string | null,
@@ -168,11 +198,11 @@ async function fetchRemoteTeamData(
     const payload: Record<string, string> = { team: String(teamId) };
     if (year != null) payload.year = String(year);
     if (type != null) payload.type = type;
-    const content = await postSummaryForm(payload);
+    const content = await postSummaryForm(cfg, payload);
     // generateKey-equivalent: skip null parts.
     const keyParts = [year, teamId, type].filter((p) => p != null);
     if (keyParts.length > 0) {
-      await kv.put(keyParts.join("-"), JSON.stringify(content), {
+      await cfg.kv.put(keyParts.join("-"), JSON.stringify(content), {
         expirationTtl: TTL_SECONDS,
       });
     }
@@ -187,7 +217,7 @@ async function fetchRemoteTeamData(
       // a non-empty list don't crash.
       return [{ teamId, team: "", pos_team: teamId } as TeamLeagueRow];
     }
-    return fetchRemoteTeamData(kv, year - 1, teamId, type, retriesRemaining - 1);
+    return fetchRemoteTeamData(cfg, year - 1, teamId, type, retriesRemaining - 1);
   }
 }
 
@@ -197,7 +227,7 @@ async function fetchRemoteTeamData(
 // `${year-or-empty}-${teamId-or-empty}-${type-or-empty}` with empty
 // segments stripped.
 export async function retrieveTeamData(
-  kv: KVNamespace,
+  cfg: SummaryConfig,
   year: number | null,
   teamId: string | number,
   type: string | null,
@@ -206,7 +236,7 @@ export async function retrieveTeamData(
   const keyParts = [year, teamId, type].filter((p) => p != null);
   if (keyParts.length === 0) return [];
   const key = keyParts.join("-");
-  const cached = await kv.get(key);
+  const cached = await cfg.kv.get(key);
   if (cached) {
     try {
       return JSON.parse(cached) as TeamLeagueRow[];
@@ -214,22 +244,24 @@ export async function retrieveTeamData(
       // Bad JSON — refetch.
     }
   }
-  return fetchRemoteTeamData(kv, year, teamId, type);
+  return fetchRemoteTeamData(cfg, year, teamId, type);
 }
 
-async function fetchRemoteLastUpdated(kv: KVNamespace): Promise<string | null> {
-  const response = await fetch(`${SUMMARY_BASE}/updated`);
+async function fetchRemoteLastUpdated(cfg: SummaryConfig): Promise<string | null> {
+  const response = await fetch(`${cfg.base}/updated`, {
+    headers: authHeaders(cfg.secret),
+  });
   if (!response.ok) return null;
   const content = (await response.json()) as LastUpdatedResponse;
-  await kv.put("summary-last-updated", JSON.stringify(content), {
+  await cfg.kv.put("summary-last-updated", JSON.stringify(content), {
     expirationTtl: TTL_SECONDS,
   });
   return content.last_updated;
 }
 
-export async function retrieveLastUpdated(kv: KVNamespace): Promise<string | null> {
+export async function retrieveLastUpdated(cfg: SummaryConfig): Promise<string | null> {
   try {
-    const cached = await kv.get("summary-last-updated");
+    const cached = await cfg.kv.get("summary-last-updated");
     if (cached) {
       const parsed = JSON.parse(cached) as LastUpdatedResponse;
       return parsed.last_updated;
@@ -238,7 +270,7 @@ export async function retrieveLastUpdated(kv: KVNamespace): Promise<string | nul
     // Fall through to refetch on any KV / parse failure.
   }
   try {
-    return await fetchRemoteLastUpdated(kv);
+    return await fetchRemoteLastUpdated(cfg);
   } catch (err) {
     console.log(`summary /updated fetch failed: ${(err as Error).message}`);
     return null;

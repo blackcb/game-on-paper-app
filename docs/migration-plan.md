@@ -82,25 +82,32 @@ USER ACTION step without confirmation from the user.**
     Express side); structured JSON `{event: "request", ...}` log
     line per response; ajv schema validator on Python responses
     (warn-only); Playwright preview-URL update deferred to 2H.
-  - 2H (cutover): **DONE 2026-05-03**. `sports.unseen-university.org`
-    is now served by the Cloudflare Worker end-to-end. Worker
-    fronts CF edge → Caddy on droplet → 127.0.0.1:7000 → Python
-    pipeline. Routing flipped via Workers Route (not Custom
-    Domain — Routes leave the existing A record in place and
-    rollback is one click). Headline perf: warm game-page TTFB
-    490 ms → 75 ms (6.5× faster), `/cfb/` TTFB 101 ms → 86 ms,
-    Lighthouse desktop perf scores +0–4 pp depending on URL.
-    Cold game page still bottlenecked by Python (~4500 ms),
-    which is unchanged from baseline — Phase 3B Containers or
-    Phase 4 ONNX port move that needle. See 2H.10b for full
-    benchmark table.
+  - 2H (cutover): **DONE 2026-05-03 + summary follow-up
+    in-flight**. `sports.unseen-university.org` is now served
+    by the Cloudflare Worker end-to-end. Routing flipped via
+    Workers Route (not Custom Domain). Headline perf: warm
+    game-page TTFB 490 ms → 75 ms (6.5× faster). See 2H.10b
+    for full benchmark.
+
+    Burn-in caught a regression in leaderboards/charts — the
+    Worker still couldn't reach the cfb-team-summaries
+    container (same root cause as Python pre-2H.5b). Fix
+    shipped in code: `lib/summary.ts` refactored to take a
+    SummaryConfig (kv + base URL + secret) like fetchAndShapePBP,
+    new `caddy/summary.unseen-university.org.caddy` snippet,
+    `docker-compose.fork.yml` binds `summary:3000` to
+    `127.0.0.1:3000`, `wrangler.toml` `SUMMARY_BASE_URL` var.
+    Awaiting USER ACTION (2H.10c): generate Origin Cert for
+    `summary.unseen-university.org`, install on droplet, add
+    DNS, push.
   - vitest suite: 143 assertions across 12 files, ~5.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-03 (Phase 2H DONE — cutover live on
-  `sports.unseen-university.org`, full smoke + Lighthouse runs
-  captured. Burn-in window 24–48 h; after that, stop the
-  Express container on the droplet)
+- Last updated: 2026-05-03 (Phase 2H cutover DONE; summary-
+  service follow-up code shipped, awaiting USER ACTION 2H.10c
+  — generate Origin Cert for `summary.unseen-university.org` +
+  scp install + add DNS + push, then leaderboards/charts work
+  end-to-end too)
 
 ### Next session entry point
 
@@ -118,13 +125,25 @@ Container investment now is too speculative. The bridge is
 throwaway; if maintainer says yes we eventually replace it
 with 3B, if they say no we drop the whole thing.
 
-**Phase 2 is done.** `sports.unseen-university.org` is live on
-the Worker as of 2026-05-03. Smoke + Lighthouse captured (see
-2H.10 / 2H.10b in Notes). Burn-in window now open.
+**Phase 2 is essentially done.** `sports.unseen-university.org`
+is live on the Worker as of 2026-05-03. Game pages render real
+PBP end-to-end. Smoke + Lighthouse captured (see 2H.10 / 2H.10b
+in Notes).
+
+**One follow-up still in-flight (2H.10c)**: leaderboards and
+charts render empty because the summary service was hardcoded
+to `http://summary:3000` (Docker-internal). Same root cause and
+same fix shape as Python — code shipped, USER ACTION pending
+to generate the Origin Cert + add DNS + push. See 2H.10c for
+the runbook. After that, every route works end-to-end.
+
+Burn-in window can run in parallel with 2H.10c.
 
 Open follow-ups, in priority order:
 
-1. **2H.11 — burn-in + cleanup**:
+1. **2H.10c — summary service follow-up**: generate cert, add
+   DNS, push. ~10 minutes of dashboard work.
+2. **2H.11 — burn-in + cleanup**:
    - Watch CF Web Analytics + `wrangler tail` for 24-48 h.
    - After clean burn-in: `docker compose stop frontend` on the
      droplet (keeps Python + Caddy + Redis running; the Express
@@ -1295,6 +1314,56 @@ Mobile field test deferred — Lighthouse desktop alone doesn't
 capture the mobile gain (gzip CPU savings + cache-hit response
 sizes hit harder on Slow 4G). Worth running before we tighten
 the lighthouserc thresholds.
+
+##### 2H.10c Summary service follow-up (caught during burn-in 2026-05-03)
+
+Smoke missed it: leaderboards (`/cfb/year/:year/teams/:type`,
+`/cfb/year/:year/players/:type`), trends + EPA chart
+(`/cfb/charts/trends`, `/cfb/year/:year/charts/team/epa`), and
+the `lastUpdated` stamp in their footers were rendering empty
+because the Worker still couldn't reach the cfb-team-summaries
+container. Same root cause as Python pre-2H.5b: hardcoded
+`http://summary:3000` in `lib/summary.ts`, only resolvable from
+inside the droplet's Docker network.
+
+Fix-up was the same shape as the python proxy:
+
+- `caddy/summary.unseen-university.org.caddy` (new) — mirrors
+  `python.unseen-university.org.caddy`, just for `127.0.0.1:3000`
+  with cert at `/etc/caddy/certs/summary-origin.{pem,key}`.
+- `docker-compose.fork.yml` — `summary` service binds 3000 to
+  `127.0.0.1:3000`.
+- `worker/wrangler.toml` — new `[vars] SUMMARY_BASE_URL =
+  "https://summary.unseen-university.org"`.
+- `lib/summary.ts` — `SummaryConfig { kv, base, secret }` instead
+  of hardcoded URL; every `retrieve*` helper takes the cfg as
+  its first arg. `index.tsx` builds the config per-request via
+  `summaryCfg(c)` and `lastUpdatedCfg(c)` helpers.
+- Tests updated (one new assertion: X-Worker-Secret header is
+  sent when secret is in the cfg). 144/144.
+
+USER ACTION steps (mirror 2H.5b):
+
+1. **CF dashboard → SSL/TLS → Origin Server → Create Certificate**.
+   Hostnames: `summary.unseen-university.org`. 15 years.
+2. **scp + install** on droplet:
+   ```
+   scp ~/Downloads/summary-origin.pem deploy@137.184.138.84:/tmp/
+   scp ~/Downloads/summary-origin.key deploy@137.184.138.84:/tmp/
+   ssh deploy@137.184.138.84 'sudo install -o caddy -g caddy -m 0640 /tmp/summary-origin.pem /etc/caddy/certs/summary-origin.pem && \
+                              sudo install -o caddy -g caddy -m 0640 /tmp/summary-origin.key /etc/caddy/certs/summary-origin.key && \
+                              shred -u /tmp/summary-origin.pem /tmp/summary-origin.key'
+   ```
+3. **CF DNS → Add record**: `A`, name `summary`, IPv4
+   `137.184.138.84`, **Proxied** (orange cloud).
+4. **Push the branch** — fork-deploy CI deploys the new compose
+   binding + the new Caddy snippet automatically.
+5. **Smoke** the leaderboard:
+   ```
+   curl -s https://sports.unseen-university.org/cfb/year/2024/teams/differential \
+     | grep -c '<tr>'
+   # ~130 with data, 1 without
+   ```
 
 ##### 2H.11 Burn-in + cleanup (24-48h)
 

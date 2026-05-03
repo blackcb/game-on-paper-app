@@ -88,3 +88,10 @@ id = "564be97a4ca8419a9ccdc8b0be0f1c3d"
 # concern, that's the Express stack's own config.
 [vars]
 PYTHON_BASE_URL = "https://python.unseen-university.org"
+# Sub-phase 2H follow-up (2026-05-03): same pattern as PYTHON_BASE_URL,
+# but for the cfb-team-summaries container (used by leaderboards,
+# trends, EPA chart, team pages, and pregame matchup percentiles).
+# Caddy on the droplet fronts the summary container at this URL with
+# the same X-Worker-Secret gate. Sub-phase 3B replaces both URLs +
+# the secret with Container bindings.
+SUMMARY_BASE_URL = "https://summary.unseen-university.org"

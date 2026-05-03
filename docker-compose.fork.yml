@@ -40,6 +40,16 @@ services:
     image: ghcr.io/akeaswaran/akeaswaran/cfb-team-summaries:latest
     expose:
       - 3000
+    # Sub-phase 2H follow-up (2026-05-03): bind 3000 to the host's
+    # loopback so the host's systemd-managed Caddy can reverse_proxy
+    # to 127.0.0.1:3000 and front summary at
+    # https://summary.unseen-university.org for the Cloudflare Worker.
+    # Same shape as the python service — UFW + the 127.0.0.1 prefix
+    # together mean nothing public can reach summary directly, only
+    # Caddy can, and Caddy enforces X-Worker-Secret. Goes away when
+    # Phase 3B moves both services to Cloudflare Containers.
+    ports:
+      - "127.0.0.1:3000:3000"
     healthcheck:
       test: curl --fail http://summary:3000/health || exit 1
       interval: 60s

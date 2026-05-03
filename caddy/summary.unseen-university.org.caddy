@@ -1,0 +1,49 @@
+# Sub-phase 2H follow-up: public summary endpoint for the Cloudflare
+# Worker. Mirrors caddy/python.unseen-university.org.caddy exactly,
+# just for the cfb-team-summaries container instead of the Python
+# /cfb/process container.
+#
+# The Worker uses summary data (leaderboards, trends, EPA chart,
+# team pages, pregame matchup percentiles) on every page that isn't
+# a single-game render. Pre-cutover the legacy Express container
+# could resolve `summary:3000` via Docker's internal DNS; post-2H
+# the Worker runs at CF edge and can't, so this vhost exposes the
+# container publicly with the same X-Worker-Secret header gate.
+#
+# Source of truth lives in this repo. The fork-deploy.yml workflow
+# substitutes ${WORKER_SHARED_SECRET} (the same GH Actions secret
+# used by the python vhost — the Worker sends one shared value
+# to both upstreams) at deploy time and writes the rendered file
+# into /etc/caddy/conf.d/ on the droplet.
+
+summary.unseen-university.org {
+    @worker_auth header X-Worker-Secret ${WORKER_SHARED_SECRET}
+
+    # Authorized requests proxy to the summary container.
+    # The summary service binds port 3000 to 127.0.0.1 in
+    # docker-compose.fork.yml so it's reachable from the host
+    # (where systemd-managed Caddy runs) without being exposed
+    # to the public internet — and the X-Worker-Secret check
+    # above already gates anyone who reaches Caddy.
+    handle @worker_auth {
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    handle {
+        respond "Forbidden" 403
+    }
+
+    # Dedicated Cloudflare Origin Cert for summary.unseen-university.org,
+    # generated via CF dashboard → SSL/TLS → Origin Server → Create
+    # Certificate. Files installed on the droplet at
+    # /etc/caddy/certs/summary-origin.{pem,key} as a one-time setup
+    # (mirrors the python vhost's cert install).
+    tls /etc/caddy/certs/summary-origin.pem /etc/caddy/certs/summary-origin.key
+
+    # Access logs flow through Caddy's default output (stderr →
+    # systemd journal). Filter via:
+    #   journalctl -u caddy -f | jq 'select(.request.host == "summary.unseen-university.org")'
+    log {
+        format json
+    }
+}

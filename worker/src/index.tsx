@@ -76,7 +76,34 @@ type Bindings = {
   // via `wrangler secret put WORKER_SHARED_SECRET`. Optional so
   // local dev or a future Container binding (3B) doesn't need it.
   WORKER_SHARED_SECRET?: string;
+  // Same shape as PYTHON_BASE_URL but for the summary service
+  // (cfb-team-summaries container at summary:3000 on the droplet).
+  // Caddy fronts it at https://summary.unseen-university.org with
+  // the same X-Worker-Secret gate. Sub-phase 3B will replace this
+  // alongside Python when both move to Cloudflare Containers.
+  SUMMARY_BASE_URL: string;
 };
+
+// Bundle the per-request summary-client config so route handlers
+// can pass one object into the lib/summary.ts retrieve* helpers
+// instead of threading three params.
+function summaryCfg(c: Context<{ Bindings: Bindings }>) {
+  return {
+    kv: c.env.LEAGUE_DATA,
+    base: c.env.SUMMARY_BASE_URL,
+    secret: c.env.WORKER_SHARED_SECRET,
+  };
+}
+
+// retrieveLastUpdated reads from a different KV namespace
+// (SUMMARY_LAST_UPDATED) so it gets its own helper.
+function lastUpdatedCfg(c: Context<{ Bindings: Bindings }>) {
+  return {
+    kv: c.env.SUMMARY_LAST_UPDATED,
+    base: c.env.SUMMARY_BASE_URL,
+    secret: c.env.WORKER_SHARED_SECRET,
+  };
+}
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -204,9 +231,9 @@ app.get("/cfb/year/:year/teams/:type", async (c) => {
   const type = (c.req.param("type") || "differential") as LeaderboardType;
   const requestedSort = c.req.query("sort") || "overall.adjEpaPerPlay";
 
-  const baseData = await retrieveLeagueData(c.env.LEAGUE_DATA, year, "overall");
+  const baseData = await retrieveLeagueData(summaryCfg(c), year, "overall");
   const { rows, sortKey } = prepareLeaderboardRows(baseData, type, requestedSort);
-  const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
+  const lastUpdated = await retrieveLastUpdated(lastUpdatedCfg(c));
 
   return c.html(
     <LeaderboardPage
@@ -231,7 +258,7 @@ app.get("/cfb/charts/trends", async (c) => {
 
   const PCTILES = [0.01, 0.25, 0.5, 0.75, 0.99];
   const allPctls = (
-    await Promise.all(PCTILES.map((p) => retrievePercentiles(c.env.LEAGUE_DATA, null, p)))
+    await Promise.all(PCTILES.map((p) => retrievePercentiles(summaryCfg(c), null, p)))
   ).flat();
 
   const pctlKey = getPercentileKey(metric);
@@ -244,7 +271,7 @@ app.get("/cfb/charts/trends", async (c) => {
     return c.json(selectedPercentiles);
   }
 
-  const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
+  const lastUpdated = await retrieveLastUpdated(lastUpdatedCfg(c));
   const seasons = selectedPercentiles
     .map((b) => b.season)
     .sort((a, b) => a - b);
@@ -264,7 +291,7 @@ app.get("/cfb/charts/trends", async (c) => {
 // fields per team, lets Chart.js do the rest.
 app.get("/cfb/year/:year/charts/team/epa", async (c) => {
   const year = parseInt(c.req.param("year"), 10);
-  const baseData = await retrieveLeagueData(c.env.LEAGUE_DATA, year, "overall");
+  const baseData = await retrieveLeagueData(summaryCfg(c), year, "overall");
   const teams: EpaChartTeam[] = baseData.map((t) => {
     const offensive = (t.offensive as Record<string, Record<string, unknown>> | undefined)?.overall;
     const defensive = (t.defensive as Record<string, Record<string, unknown>> | undefined)?.overall;
@@ -276,7 +303,7 @@ app.get("/cfb/year/:year/charts/team/epa", async (c) => {
       adjDefEpa: defensive?.adjEpaPerPlay as number | null | undefined,
     };
   });
-  const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
+  const lastUpdated = await retrieveLastUpdated(lastUpdatedCfg(c));
   return c.html(<EpaChartPage teams={teams} season={year} lastUpdated={lastUpdated} />);
 });
 
@@ -300,7 +327,7 @@ app.get("/cfb/team/:teamId", async (c) => {
     return c.json(data);
   }
 
-  const breakdowns = await retrieveTeamData(c.env.LEAGUE_DATA, null, teamId, null);
+  const breakdowns = await retrieveTeamData(summaryCfg(c), null, teamId, null);
   const type = c.req.query("type") ?? "differential";
   let metric = c.req.query("metric") ?? "overall.adjEpaPerPlay";
   if (
@@ -319,7 +346,7 @@ app.get("/cfb/team/:teamId", async (c) => {
     const PCTILES = [0.01, 0.25, 0.5, 0.75, 0.99];
     const allPctls = (
       await Promise.all(
-        PCTILES.map((p) => retrievePercentiles(c.env.LEAGUE_DATA, null, p)),
+        PCTILES.map((p) => retrievePercentiles(summaryCfg(c), null, p)),
       )
     ).flat();
     const pctlKey = getPercentileKey(metric);
@@ -337,7 +364,7 @@ app.get("/cfb/team/:teamId", async (c) => {
     .filter((n) => !Number.isNaN(n))
     .sort((a, b) => a - b);
 
-  const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
+  const lastUpdated = await retrieveLastUpdated(lastUpdatedCfg(c));
 
   return c.html(
     <TeamPage
@@ -376,10 +403,10 @@ app.get("/cfb/year/:year/team/:teamId", async (c) => {
 
   // Four parallel summary fetches, one per stat slice.
   const [breakdown, passing, rushing, receiving] = await Promise.all([
-    retrieveTeamData(c.env.LEAGUE_DATA, year, teamId, "overall"),
-    retrieveTeamData(c.env.LEAGUE_DATA, year, teamId, "passing"),
-    retrieveTeamData(c.env.LEAGUE_DATA, year, teamId, "rushing"),
-    retrieveTeamData(c.env.LEAGUE_DATA, year, teamId, "receiving"),
+    retrieveTeamData(summaryCfg(c), year, teamId, "overall"),
+    retrieveTeamData(summaryCfg(c), year, teamId, "passing"),
+    retrieveTeamData(summaryCfg(c), year, teamId, "rushing"),
+    retrieveTeamData(summaryCfg(c), year, teamId, "receiving"),
   ]);
 
   const players: PlayersByType = {
@@ -542,8 +569,8 @@ app.get("/cfb/game/:gameId", async (c) => {
     const homeId = homeTeam.id;
     const [awayBreakdown, homeBreakdown] = await time(c, "summary", () =>
       Promise.all([
-        retrieveTeamData(c.env.LEAGUE_DATA, season, awayId, "overall"),
-        retrieveTeamData(c.env.LEAGUE_DATA, season, homeId, "overall"),
+        retrieveTeamData(summaryCfg(c), season, awayId, "overall"),
+        retrieveTeamData(summaryCfg(c), season, homeId, "overall"),
       ]),
     );
     const pregameData: PregameData = {
@@ -600,7 +627,7 @@ app.get("/cfb/game/:gameId", async (c) => {
   let percentiles: Array<Record<string, unknown>> = [];
   try {
     percentiles = await time(c, "percentiles", async () =>
-      (await retrievePercentiles(c.env.LEAGUE_DATA, clamped, null)) as Array<Record<string, unknown>>,
+      (await retrievePercentiles(summaryCfg(c), clamped, null)) as Array<Record<string, unknown>>,
     );
   } catch (err) {
     console.log(`percentiles fetch failed: ${(err as Error).message}`);
@@ -621,9 +648,9 @@ app.get("/cfb/year/:year/players/:type", async (c) => {
   const type = (c.req.param("type") || "passing") as PlayerLeaderboardType;
   const sortKey = c.req.query("sort") || "advanced.epaPerPlay";
 
-  const baseData = await retrieveLeagueData(c.env.LEAGUE_DATA, year, type);
+  const baseData = await retrieveLeagueData(summaryCfg(c), year, type);
   const rows = preparePlayerRows(baseData, sortKey);
-  const lastUpdated = await retrieveLastUpdated(c.env.SUMMARY_LAST_UPDATED);
+  const lastUpdated = await retrieveLastUpdated(lastUpdatedCfg(c));
 
   return c.html(
     <PlayerLeaderboardPage
