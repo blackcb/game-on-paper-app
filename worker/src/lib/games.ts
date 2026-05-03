@@ -1,3 +1,5 @@
+import { logSchemaFailure, validateProcessResponse } from "./schema";
+
 // Replaces frontend/cfb/games.js. Per-game PBP retrieval: calls the
 // Python `/cfb/process` service and reshapes the response into the
 // ProcessedGameData shape the templates expect. As of sub-phase 2D
@@ -121,6 +123,11 @@ interface ProcessResponse {
 // Mirrors games.js:129-171 (_remoteRetrievePBP). Public from sub-
 // phase 2D onwards — was wrapped by getPBP/peekCachedPBP in 2B
 // when KV was the cache layer.
+//
+// Schema validation (sub-phase 2G): the Python response is run
+// through the JSON Schema contract validator before the reshape.
+// Failures are warn-only — Python is the canonical validator so
+// rejecting here would turn schema drift into user-visible errors.
 export async function fetchAndShapePBP(
   pythonBase: string,
   gameId: string | number,
@@ -134,6 +141,9 @@ export async function fetchAndShapePBP(
     throw new Error(`Python /cfb/process returned ${response.status}`);
   }
   const data = (await response.json()) as ProcessResponse;
+  if (!validateProcessResponse(data)) {
+    logSchemaFailure(gameId, validateProcessResponse.errors ?? []);
+  }
   const pbp: ProcessedGameData = { ...(data as ProcessedGameData) };
   pbp.plays = data.plays ?? [];
   pbp.advBoxScore = data.box_score;

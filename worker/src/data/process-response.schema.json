@@ -1,0 +1,995 @@
+{
+  "$defs": {
+    "Clock": {
+      "additionalProperties": true,
+      "description": "The reshaped play.clock block from app.py.\n\nSource columns are typed inconsistently in pandas (sometimes int,\nsometimes string like \"15\"/\"00\"); the contract is that the keys\nare present.",
+      "properties": {
+        "displayValue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Displayvalue"
+        },
+        "minutes": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minutes"
+        },
+        "seconds": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seconds"
+        }
+      },
+      "title": "Clock",
+      "type": "object"
+    },
+    "EndSide": {
+      "additionalProperties": true,
+      "description": "The play.end block produced by the reshape.\n\nDiffers from StartSide in two ways:\n  - field is `defPosTeamTimeouts` instead of `defTeamTimeouts`\n    (legacy naming inherited from upstream \u2014 fix in Phase 1)\n  - no `posTeamSpread` (only on start side)",
+      "properties": {
+        "ExpScoreDiff": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expscorediff"
+        },
+        "ExpScoreDiff_Time_Ratio": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expscorediff Time Ratio"
+        },
+        "awayScore": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Awayscore"
+        },
+        "defPosTeamTimeouts": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Defposteamtimeouts"
+        },
+        "def_pos_team": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TeamRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "def_pos_team_score": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Def Pos Team Score"
+        },
+        "distance": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance"
+        },
+        "down": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Down"
+        },
+        "downDistanceText": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Downdistancetext"
+        },
+        "homeScore": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Homescore"
+        },
+        "posTeamTimeouts": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Posteamtimeouts"
+        },
+        "pos_score_diff": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pos Score Diff"
+        },
+        "pos_team": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TeamRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pos_team_score": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pos Team Score"
+        },
+        "possessionText": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Possessiontext"
+        },
+        "shortDownDistanceText": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shortdowndistancetext"
+        },
+        "team": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Team"
+        },
+        "yardLine": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Yardline"
+        },
+        "yardsToEndzone": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Yardstoendzone"
+        }
+      },
+      "title": "EndSide",
+      "type": "object"
+    },
+    "ExpectedPoints": {
+      "additionalProperties": true,
+      "properties": {
+        "added": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Added"
+        },
+        "after": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before"
+        }
+      },
+      "title": "ExpectedPoints",
+      "type": "object"
+    },
+    "ModelInputs": {
+      "additionalProperties": true,
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/ModelInputsSide"
+        },
+        "start": {
+          "$ref": "#/$defs/ModelInputsSide"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "ModelInputs",
+      "type": "object"
+    },
+    "ModelInputsSide": {
+      "additionalProperties": true,
+      "description": "Either play.modelInputs.start or play.modelInputs.end.\n\nInputs the EP/WP models consume \u2014 keys must be present even if\nthe value is null/NaN, because the model wrappers in\nsportsdataverse.cfb.cfb_pbp coerce types downstream.",
+      "properties": {
+        "ExpScoreDiff": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expscorediff"
+        },
+        "ExpScoreDiff_Time_Ratio": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expscorediff Time Ratio"
+        },
+        "TimeSecsRem": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timesecsrem"
+        },
+        "adj_TimeSecsRem": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adj Timesecsrem"
+        },
+        "defTeamTimeouts": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Defteamtimeouts"
+        },
+        "distance": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance"
+        },
+        "down": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Down"
+        },
+        "is_home": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Is Home"
+        },
+        "period": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period"
+        },
+        "posTeamTimeouts": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Posteamtimeouts"
+        },
+        "pos_score_diff": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pos Score Diff"
+        },
+        "pos_team_receives_2H_kickoff": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pos Team Receives 2H Kickoff"
+        },
+        "spread_time": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spread Time"
+        },
+        "yardsToEndzone": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Yardstoendzone"
+        }
+      },
+      "title": "ModelInputsSide",
+      "type": "object"
+    },
+    "Play": {
+      "additionalProperties": true,
+      "description": "One play in the response.plays array.\n\nOnly the reshape blocks are validated structurally \u2014 the rest of\nthe play's ~370 columns from the pandas DataFrame are passed\nthrough under `extra='allow'`.",
+      "properties": {
+        "clock": {
+          "$ref": "#/$defs/Clock"
+        },
+        "end": {
+          "$ref": "#/$defs/EndSide"
+        },
+        "expectedPoints": {
+          "$ref": "#/$defs/ExpectedPoints"
+        },
+        "modelInputs": {
+          "$ref": "#/$defs/ModelInputs"
+        },
+        "start": {
+          "$ref": "#/$defs/StartSide"
+        },
+        "type": {
+          "$ref": "#/$defs/TypeBlock"
+        },
+        "winProbability": {
+          "$ref": "#/$defs/WinProbability"
+        }
+      },
+      "required": [
+        "clock",
+        "type",
+        "modelInputs",
+        "expectedPoints",
+        "winProbability",
+        "start",
+        "end"
+      ],
+      "title": "Play",
+      "type": "object"
+    },
+    "StartSide": {
+      "additionalProperties": true,
+      "description": "The play.start block produced by the reshape.",
+      "properties": {
+        "ExpScoreDiff": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expscorediff"
+        },
+        "ExpScoreDiff_Time_Ratio": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expscorediff Time Ratio"
+        },
+        "awayScore": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Awayscore"
+        },
+        "defTeamTimeouts": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Defteamtimeouts"
+        },
+        "def_pos_team": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TeamRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "def_pos_team_score": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Def Pos Team Score"
+        },
+        "distance": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance"
+        },
+        "down": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Down"
+        },
+        "downDistanceText": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Downdistancetext"
+        },
+        "homeScore": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Homescore"
+        },
+        "posTeamSpread": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Posteamspread"
+        },
+        "posTeamTimeouts": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Posteamtimeouts"
+        },
+        "pos_score_diff": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pos Score Diff"
+        },
+        "pos_team": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TeamRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pos_team_score": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pos Team Score"
+        },
+        "possessionText": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Possessiontext"
+        },
+        "shortDownDistanceText": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shortdowndistancetext"
+        },
+        "team": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Team"
+        },
+        "yardLine": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Yardline"
+        },
+        "yardsToEndzone": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Yardstoendzone"
+        }
+      },
+      "title": "StartSide",
+      "type": "object"
+    },
+    "TeamRef": {
+      "additionalProperties": true,
+      "description": "A {id, name} reference inside play.start.pos_team and similar.\n\n`id` is *usually* a string but ESPN occasionally serves it as an int\n(observed for a single play in the 401403910 fixture: an int `142` on\nthe last play's `end.def_pos_team.id`). Accept Any.",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        }
+      },
+      "title": "TeamRef",
+      "type": "object"
+    },
+    "TypeBlock": {
+      "additionalProperties": true,
+      "properties": {
+        "abbreviation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Abbreviation"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        }
+      },
+      "title": "TypeBlock",
+      "type": "object"
+    },
+    "WinProbability": {
+      "additionalProperties": true,
+      "properties": {
+        "added": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Added"
+        },
+        "after": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before"
+        }
+      },
+      "title": "WinProbability",
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "description": "The /cfb/process response on success.\n\nRequired: id, count, plays. Everything else is Optional because\nindividual ESPN payloads can be missing fields (broadcasts, videos,\nstandings) for unusual game states.",
+  "properties": {
+    "awayTeamId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Awayteamid"
+    },
+    "boxScore": {
+      "default": null,
+      "title": "Boxscore"
+    },
+    "box_score": {
+      "default": null,
+      "title": "Box Score"
+    },
+    "broadcasts": {
+      "anyOf": [
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Broadcasts"
+    },
+    "count": {
+      "title": "Count",
+      "type": "integer"
+    },
+    "drives": {
+      "default": null,
+      "title": "Drives"
+    },
+    "espnWinProbability": {
+      "anyOf": [
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Espnwinprobability"
+    },
+    "gameInfo": {
+      "default": null,
+      "title": "Gameinfo"
+    },
+    "header": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Header"
+    },
+    "homeTeamId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hometeamid"
+    },
+    "homeTeamSpread": {
+      "default": null,
+      "title": "Hometeamspread"
+    },
+    "id": {
+      "title": "Id",
+      "type": "integer"
+    },
+    "overUnder": {
+      "default": null,
+      "title": "Overunder"
+    },
+    "pickcenter": {
+      "anyOf": [
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pickcenter"
+    },
+    "plays": {
+      "items": {
+        "$ref": "#/$defs/Play"
+      },
+      "title": "Plays",
+      "type": "array"
+    },
+    "scoringPlays": {
+      "anyOf": [
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scoringplays"
+    },
+    "season": {
+      "default": null,
+      "title": "Season"
+    },
+    "standings": {
+      "default": null,
+      "title": "Standings"
+    },
+    "videos": {
+      "anyOf": [
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Videos"
+    },
+    "winprobability": {
+      "anyOf": [
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Winprobability"
+    }
+  },
+  "required": [
+    "id",
+    "count",
+    "plays"
+  ],
+  "title": "ProcessResponse",
+  "type": "object"
+}

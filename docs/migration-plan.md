@@ -77,27 +77,28 @@ USER ACTION step without confirmation from the user.**
     confirmed KV warming via the route (479 KB scoreboard
     payload cached on first hit; subsequent hits ~170 ms with
     no ESPN call).
+  - 2G (tests + observability): **completed 2026-05-03**.
+    Server-Timing header on every response (op names match the
+    Express side); structured JSON `{event: "request", ...}` log
+    line per response; ajv schema validator on Python responses
+    (warn-only); Playwright preview-URL update deferred to 2H.
   - 2H (cutover): not started
-  - 2G (tests): 135 vitest assertions, ~3.8 s.
+  - vitest suite: 141 assertions across 12 files, ~5.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-03 (Phase 2F — cron-warmed scoreboard
-  completed; the `/cfb/` route now reads from KV first)
+- Last updated: 2026-05-03 (Phase 2G — tests + observability
+  completed; Server-Timing + structured logging + ajv schema
+  validator all live)
 
 ### Next session entry point
 
-Late-day stop on 2026-05-03. Branch `instrument-plus-cloudflare-cdn`,
-four commits ahead of the prior checkpoint: 2B full template port
+End-of-day stop on 2026-05-03. Branch `instrument-plus-cloudflare-cdn`,
+five commits ahead of the prior checkpoint: 2B full template port
 (`6f14837`), 2D Cache API (`4dda877`), 2E static assets
-(`aa5f1bb`), and 2F cron-warmed scoreboard. Working tree clean
-once 2F is committed.
+(`aa5f1bb`), 2F cron-warmed scoreboard (`f166679`), and 2G
+observability. Working tree clean once 2G is committed.
 
-**Phase 2F is complete.** What's left in Phase 2:
-- **2G (tests + observability)**: 135 vitest tests passing
-  (covers all of 2B/2D/2E/2F), but the perf-plan Day 1
-  Server-Timing carry-forward, structured JSON logging, and
-  Schema validator porting are still pending. Could be picked
-  up next.
+**Phase 2G is complete.** What's left in Phase 2:
 - **2H (parallel deploy + DNS cutover)**: the destructive step
   that flips `gameonpaper.com` (or the replica) DNS to the
   Worker. Blocked on the Python proxy gap — `PYTHON_BASE_URL`
@@ -105,13 +106,17 @@ once 2F is committed.
   resolve from CF edge. Resolved either by (a) swapping in a
   publicly-reachable Python URL on the droplet or (b) moving
   Python into a Cloudflare Container per Phase 3B.
+- **2E follow-on**: hashed-filename + 1-year `/assets/*`
+  cache-rule bump (deferred; nice-to-have before cutover so
+  browser caching is tuned).
+- **2G follow-on**: Playwright preview-URL update (deferred;
+  pairs naturally with 2H since both involve preview deploys).
 
-Recommended next step: tackle **2G (Server-Timing + structured
-logging)** — it's pure additive work, doesn't depend on Python
-reachability, and gives us observability into the cron's
-behavior in production. The hashed-filename cleanup + Phase 0
-cache-rule bump from 2E is also deferred; both are nice-to-have
-before 2H so cutover lands with browser caching tuned.
+Recommended next step: think about how to land 2H. The Python
+reachability question is the actual blocker — pick whether to
+go with Phase 3B's Container binding (more work but plan-aligned)
+or a temporary public Python URL on the droplet (quick bridge
+that gets the Worker fully serving real game data this week).
 
 Sanity before starting:
 ```
@@ -829,22 +834,52 @@ Pages and avoids a second deploy artifact.
 
 #### 2G — Tests + observability
 
-- ☐ Vitest tests (using `@cloudflare/vitest-pool-workers`) for:
-  - `retrieveGameList` sort logic
-  - `calculateGEI` (currently in [games.js:166](../frontend/cfb/games.js))
+- ☑ Vitest tests (using `@cloudflare/vitest-pool-workers`) for:
+  - `prepareGameList` sort logic — `test/scoreboard.test.ts`.
+  - `calculateGEI` — `test/game.test.ts`.
   - The recursive-fallback cap (asserts max 2 retries, hits 2014 floor)
-  - QUARANTINE_LIST routing
-- ☐ Carry forward the Server-Timing instrumentation from
-  perf-plan Day 1 — every Worker response should have it. Use
-  `c.res.headers.set('Server-Timing', ...)`.
-- ☐ Carry forward structured JSON logging — in Workers, just
-  `console.log(JSON.stringify({...}))`. Workers Logs surfaces this in the
-  dashboard.
-- ☐ Update the JSON Schema contract validator from perf-plan Day 4 to run
-  in the Worker against Python responses.
-- ☐ Update Playwright E2E suite to point at preview URLs — every Worker
-  deploy via PR gets a unique `*.workers.dev` URL. Update
-  `.github/workflows/e2e.yml` to use the preview URL for PR runs.
+    — `test/summary.test.ts`.
+  - QUARANTINE_LIST routing — `test/game.test.ts`.
+
+  All four covered by the suite that grew up alongside the route
+  ports (2B/2D/2F). 141 assertions total as of 2G.
+- ☑ Carry forward the Server-Timing instrumentation from
+  perf-plan Day 1. **Done 2026-05-03.** New `lib/timing.ts`
+  with `time(c, name, fn)` + `timingMiddleware()`. Same op
+  names as `frontend/cfb/timing.js` (`python`, `espn_pbp`,
+  `espn_scoreboard`, `summary`, `cache_lookup`, `percentiles`,
+  `render`, `total`) so the perf-plan baselines stay 1:1
+  comparable. Production smoke confirmed `Server-Timing:
+  cache_lookup;dur=11, espn_pbp;dur=283, render;dur=0,
+  total;dur=294` on a fresh quarantine-game render.
+- ☑ Carry forward structured JSON logging. **Done 2026-05-03.**
+  Same middleware emits a `{event: "request", method, path,
+  status, X_ms, ...}` line per response via `console.log`.
+  Workers Logs surfaces it in the dashboard. Pre-existing
+  ad-hoc `console.log` calls in `lib/games.ts` /
+  `lib/summary.ts` still fire on errors but are now
+  unstructured noise next to the structured per-request line.
+- ☑ Update the JSON Schema contract validator from perf-plan
+  Day 4 to run in the Worker against Python responses.
+  **Done 2026-05-03.** New `lib/schema.ts` wraps `ajv` +
+  `ajv-formats` + the canonical
+  `shared/process-response.schema.json` (copied to
+  `worker/src/data/` so wrangler bundles it). Wired into
+  `fetchAndShapePBP`. Warn-only — emits
+  `{event: "schema_validation_failure", source: "worker",
+  gameId, error_count, errors}` on failure but always returns
+  the payload. Mirrors `frontend/cfb/games.js:254-266`
+  exactly.
+- ◐ Update Playwright E2E suite to point at preview URLs.
+  **Deferred.** The current `.github/workflows/e2e.yml`
+  targets `sports.unseen-university.org` (the production
+  replica) on a daily cron + manual dispatch. Per-PR preview
+  URLs would require: (a) opening a PR-driven Worker deploy
+  (with a uniquely-named *.workers.dev preview), and (b)
+  threading that URL into the workflow. Not blocking — the
+  existing workflow still catches drift. Pick up at the
+  same time as 2H so both Worker preview deploys and the
+  Playwright wiring land together.
 
 #### 2H — Parallel deploy + cutover
 
@@ -1217,6 +1252,99 @@ headers on every Worker response, structured JSON logging,
 Schema validator porting). After 2G, only sub-phase 2H (cutover)
 remains in Phase 2 — and that's gated on the Python proxy gap
 resolving via 3B Container or a public Python URL on the droplet.
+
+#### 2G Tests + observability (2026-05-03)
+
+Three pieces of additive work. None require Python reachability,
+none change route semantics — pure observability.
+
+**Server-Timing + structured logging** (`lib/timing.ts`). Hono
+middleware that:
+
+- Stores `c.var.timings` (a per-request `Record<string, number>`).
+- After `next()`, accumulates a `total` measurement and serializes
+  the timings into `Server-Timing: name1;dur=N, name2;dur=M` on
+  the outgoing response.
+- Logs a single structured line per response:
+  `{event: "request", method, path, status, total_ms, X_ms, ...}`.
+
+Op names match the Express side (`frontend/cfb/timing.js`) so the
+perf-plan baselines stay 1:1 comparable across the two stacks:
+`python`, `espn_pbp`, `espn_scoreboard`, `summary`,
+`cache_lookup`, `percentiles`, `render`, `total`. Sprinkled
+through `index.tsx` at every expensive op:
+
+- `/cfb/game/:gameId`: `cache_lookup`, `espn_pbp`, `python`,
+  `summary` (pregame), `percentiles`, `render`.
+- `/cfb/`, `/cfb/year/...`: `espn_scoreboard`, plus implicit
+  `total`.
+- Static-content routes (glossary, healthcheck, redirects):
+  just `total`.
+
+`time(c, name, fn)` wraps an async op so its duration accumulates
+under `name`; same name fired multiple times sums into one
+bucket. Capturing IDs into local consts before the closure was
+required in two spots so TS kept the non-null narrowing through
+the callback (see the pregame branch's `awayId` / `homeId`).
+
+**JSON Schema validator** (`lib/schema.ts`). Wraps `ajv` +
+`ajv-formats` + the canonical `shared/process-response.schema.json`
+schema (copied to `worker/src/data/process-response.schema.json`
+so wrangler bundles it). Added two npm deps: `ajv`, `ajv-formats`.
+
+The validator runs inside `fetchAndShapePBP` right after the
+Python response parses. On schema failure it emits
+`{event: "schema_validation_failure", source: "worker", gameId,
+error_count, errors}` (truncates errors to first 5) and returns
+the payload unchanged. Warn-only — Python is the canonical
+validator and rejecting at the Worker boundary would turn schema
+drift into user-visible errors.
+
+One TS wrinkle: `ajv.compile(schema)` narrows the validated
+value's type to the JSON-Schema's inferred type, which collapses
+to `{}` for our loose-everywhere schema and poisons callers'
+property access. Worked around with an un-narrowing wrapper:
+
+```ts
+const compiledValidator = ajv.compile(schema);
+export const validateProcessResponse: ((data: unknown) => boolean) & {
+  errors?: SchemaError[] | null;
+} = (data) => compiledValidator(data);
+```
+
+**Tests** (`test/observability.test.ts`, +6 = 141 total):
+
+- Server-Timing header is set on the redirect response and on
+  the glossary response.
+- Structured request log is emitted per response with the
+  expected fields.
+- Schema validator: minimally-valid payload passes; broken
+  payload (string where object expected) fails.
+- `logSchemaFailure` emits the structured line on stdout.
+
+Production smoke (`sports.unseen-university.workers.dev`):
+
+| Path | Server-Timing |
+|---|---|
+| `/cfb/glossary` | `total;dur=0` (no upstream) |
+| `/cfb/` (KV-warm) | `espn_scoreboard;dur=783, total;dur=783` |
+| `/cfb/game/<quarantined>?bust=N` (cache miss) | `cache_lookup;dur=11, espn_pbp;dur=283, render;dur=0, total;dur=294` |
+| `/cfb/game/<real-id>?bust=N` (cache miss → pbp error) | `cache_lookup;dur=21, espn_pbp;dur=301, python;dur=4, total;dur=326` |
+
+The `python;dur=4` on the pbp-error path is "we tried Python, the
+DNS lookup failed in 4ms" — signal you can grep for in logs
+during a Python outage. The 783ms `espn_scoreboard` on the warm
+KV path is one-off (probably a cold KV region); steady-state KV
+reads are sub-50ms.
+
+**Deferred to 2H**: Playwright preview-URL update. Per-PR
+preview deploys + workflow re-wire pair naturally with cutover
+since both touch the staging surface.
+
+**Resume hint**: only sub-phase 2H (cutover) remains in Phase 2.
+Gated on the Python reachability gap — pick whether to bridge
+with a public Python URL on the droplet or move directly to
+Phase 3B (Cloudflare Container).
 
 #### 2A scaffolding (2026-05-02)
 

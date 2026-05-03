@@ -57,6 +57,7 @@ import {
   type TeamData as SeasonTeamData,
 } from "./templates/TeamSeason";
 import { TrendsPage } from "./templates/Trends";
+import { time, timingMiddleware } from "./lib/timing";
 
 type Bindings = {
   // KV namespaces (2C). Bulk league/team summary cache + a small
@@ -71,6 +72,12 @@ type Bindings = {
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+// 2G: per-request Server-Timing + structured-JSON request log on
+// every response. Op names match the Express side (`python`,
+// `espn_pbp`, `kv_lookup`, `summary`, `render`, `total`) so the
+// perf-plan baselines in docs/perf-plan.md stay 1:1 comparable.
+app.use("*", timingMiddleware());
 
 app.get("/", (c) => c.redirect("/cfb/"));
 
@@ -100,14 +107,18 @@ async function renderScoreboard(
     parseInt(String(group), 10) === 80;
   let games: ScheduleEvent[];
   if (isDefaultCurrent) {
-    games = await getCachedCurrentScoreboard(c.env.LEAGUE_DATA);
+    games = await time(c, "espn_scoreboard", () =>
+      getCachedCurrentScoreboard(c.env.LEAGUE_DATA),
+    );
   } else {
-    games = await getGames({
-      year: opts.year,
-      week: opts.week,
-      type: opts.seasontype,
-      group,
-    });
+    games = await time(c, "espn_scoreboard", () =>
+      getGames({
+        year: opts.year,
+        week: opts.week,
+        type: opts.seasontype,
+        group,
+      }),
+    );
   }
   const scoreboard = prepareGameList(games);
   return c.html(
@@ -465,7 +476,7 @@ app.get("/cfb/game/:gameId", async (c) => {
   // automatically.
   const cache = caches.default;
   const cacheKey = new Request(c.req.url, { method: "GET" });
-  const cachedResponse = await cache.match(cacheKey);
+  const cachedResponse = await time(c, "cache_lookup", () => cache.match(cacheKey));
   if (cachedResponse) return cachedResponse;
 
   // Quarantine gate runs before ESPN — short-circuits the probe
@@ -475,7 +486,7 @@ app.get("/cfb/game/:gameId", async (c) => {
   if (QUARANTINE_LIST.has(gameId)) {
     let envelope: EspnPbpEnvelope;
     try {
-      envelope = await probeEspnPbp(gameId);
+      envelope = await time(c, "espn_pbp", () => probeEspnPbp(gameId));
     } catch (err) {
       throw new Error(`ESPN PBP probe failed for ${gameId}: ${(err as Error).message}`);
     }
@@ -483,9 +494,9 @@ app.get("/cfb/game/:gameId", async (c) => {
     if (competition == null) {
       throw new Error(`ESPN PBP envelope had no header.competitions[0] for ${gameId}`);
     }
-    const html = (
-      <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="quarantine" />
-    ).toString();
+    const html = await time(c, "render", async () =>
+      (<GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="quarantine" />).toString(),
+    );
     const response = cachedHtml(html, CACHE_CONTROL.quarantine);
     c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
     return response;
@@ -497,7 +508,7 @@ app.get("/cfb/game/:gameId", async (c) => {
   // take it.
   let envelope: EspnPbpEnvelope;
   try {
-    envelope = await probeEspnPbp(gameId);
+    envelope = await time(c, "espn_pbp", () => probeEspnPbp(gameId));
   } catch (err) {
     throw new Error(`ESPN PBP probe failed for ${gameId}: ${(err as Error).message}`);
   }
@@ -518,10 +529,16 @@ app.get("/cfb/game/:gameId", async (c) => {
 
   if (isScheduled && homeTeam?.id != null && awayTeam?.id != null) {
     // Pregame: pull both teams' summary breakdowns in parallel.
-    const [awayBreakdown, homeBreakdown] = await Promise.all([
-      retrieveTeamData(c.env.LEAGUE_DATA, season, awayTeam.id, "overall"),
-      retrieveTeamData(c.env.LEAGUE_DATA, season, homeTeam.id, "overall"),
-    ]);
+    // Capture IDs before the time() closure so TS keeps the
+    // non-null narrowing through the callback.
+    const awayId = awayTeam.id;
+    const homeId = homeTeam.id;
+    const [awayBreakdown, homeBreakdown] = await time(c, "summary", () =>
+      Promise.all([
+        retrieveTeamData(c.env.LEAGUE_DATA, season, awayId, "overall"),
+        retrieveTeamData(c.env.LEAGUE_DATA, season, homeId, "overall"),
+      ]),
+    );
     const pregameData: PregameData = {
       gameInfo: competition as PregameData["gameInfo"],
       header: (envelope.gamepackageJSON?.header ?? {}) as PregameData["header"],
@@ -532,9 +549,9 @@ app.get("/cfb/game/:gameId", async (c) => {
         ],
       },
     };
-    const html = (
-      <PregamePage gameData={pregameData} season={season} week={week} viewFull={previewMode === "old"} />
-    ).toString();
+    const html = await time(c, "render", async () =>
+      (<PregamePage gameData={pregameData} season={season} week={week} viewFull={previewMode === "old"} />).toString(),
+    );
     const response = cachedHtml(html, CACHE_CONTROL.pregame);
     c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
     return response;
@@ -547,7 +564,7 @@ app.get("/cfb/game/:gameId", async (c) => {
   // recovers.
   let data: ProcessedGameData;
   try {
-    data = await fetchAndShapePBP(c.env.PYTHON_BASE_URL, gameId);
+    data = await time(c, "python", () => fetchAndShapePBP(c.env.PYTHON_BASE_URL, gameId));
   } catch (err) {
     console.log(`Python /cfb/process failed for ${gameId}: ${(err as Error).message}`);
     return c.html(
@@ -573,15 +590,15 @@ app.get("/cfb/game/:gameId", async (c) => {
   const clamped = clampSeason(headerSeason);
   let percentiles: Array<Record<string, unknown>> = [];
   try {
-    percentiles = (await retrievePercentiles(c.env.LEAGUE_DATA, clamped, null)) as Array<
-      Record<string, unknown>
-    >;
+    percentiles = await time(c, "percentiles", async () =>
+      (await retrievePercentiles(c.env.LEAGUE_DATA, clamped, null)) as Array<Record<string, unknown>>,
+    );
   } catch (err) {
     console.log(`percentiles fetch failed: ${(err as Error).message}`);
   }
-  const html = (
-    <GamePage gameData={data as unknown as RenderableGameData} percentiles={percentiles} season={clamped} />
-  ).toString();
+  const html = await time(c, "render", async () =>
+    (<GamePage gameData={data as unknown as RenderableGameData} percentiles={percentiles} season={clamped} />).toString(),
+  );
   const response = cachedHtml(html, cacheControl);
   c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
