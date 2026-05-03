@@ -82,27 +82,25 @@ USER ACTION step without confirmation from the user.**
     Express side); structured JSON `{event: "request", ...}` log
     line per response; ajv schema validator on Python responses
     (warn-only); Playwright preview-URL update deferred to 2H.
-  - 2H (cutover): **prep mostly complete 2026-05-03, mid-bring-up**.
-    Worker sends X-Worker-Secret. Hostname picked twice — first
-    `python.sports.unseen-university.org` (failed Universal SSL on
-    edge because Free plan only covers one level deep), then
-    settled on the single-level `python.unseen-university.org`.
-    Caddy snippet codified in `caddy/`, fork-deploy.yml renders
-    + ships it on every push (with self-healing conf.d setup so
-    a fresh droplet bootstraps cleanly). User completed: secret +
-    GH Actions secret + droplet conf.d + Wrangler secret + DNS
-    for `python.unseen-university.org`. Remaining: generate a CF
-    Origin Cert for the new hostname, install on droplet at
-    `/etc/caddy/certs/python-origin.{pem,key}` (see 2H.5b), push
-    (CI deploys the renamed snippet automatically), smoke, then
-    Custom Domain click for the destructive flip.
+  - 2H (cutover): **DONE 2026-05-03**. `sports.unseen-university.org`
+    is now served by the Cloudflare Worker end-to-end. Worker
+    fronts CF edge → Caddy on droplet → 127.0.0.1:7000 → Python
+    pipeline. Routing flipped via Workers Route (not Custom
+    Domain — Routes leave the existing A record in place and
+    rollback is one click). Headline perf: warm game-page TTFB
+    490 ms → 75 ms (6.5× faster), `/cfb/` TTFB 101 ms → 86 ms,
+    Lighthouse desktop perf scores +0–4 pp depending on URL.
+    Cold game page still bottlenecked by Python (~4500 ms),
+    which is unchanged from baseline — Phase 3B Containers or
+    Phase 4 ONNX port move that needle. See 2H.10b for full
+    benchmark table.
   - vitest suite: 143 assertions across 12 files, ~5.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-03 (Phase 2H — all prep done; user
-  completed secret + DNS + GH/Wrangler secrets + droplet
-  conf.d setup. Branch ready to push and trigger CI bring-up;
-  Custom Domain click is the final destructive step)
+- Last updated: 2026-05-03 (Phase 2H DONE — cutover live on
+  `sports.unseen-university.org`, full smoke + Lighthouse runs
+  captured. Burn-in window 24–48 h; after that, stop the
+  Express container on the droplet)
 
 ### Next session entry point
 
@@ -120,48 +118,29 @@ Container investment now is too speculative. The bridge is
 throwaway; if maintainer says yes we eventually replace it
 with 3B, if they say no we drop the whole thing.
 
-**Phase 2H — most prerequisite steps done as of the 2026-05-03
-checkpoint.** Secret generated, GH Actions secret set, droplet
-conf.d + import line in place (now also self-healed in CI for
-any future droplet rebuild), CF DNS record for
-`python.unseen-university.org` added, Wrangler secret
-`WORKER_SHARED_SECRET` set on the worker.
+**Phase 2 is done.** `sports.unseen-university.org` is live on
+the Worker as of 2026-05-03. Smoke + Lighthouse captured (see
+2H.10 / 2H.10b in Notes). Burn-in window now open.
 
-One USER ACTION still pending before push:
+Open follow-ups, in priority order:
 
-- **2H.5b — generate + install the Origin Cert for
-  `python.unseen-university.org`.** CF dashboard → SSL/TLS →
-  Origin Server → Create Certificate (hostnames:
-  `python.unseen-university.org`, validity 15 years), then
-  `scp` the .pem and .key to the droplet at
-  `/etc/caddy/certs/python-origin.{pem,key}` (mode 0640, owned
-  by caddy:caddy). See 2H.5b for the exact commands.
+1. **2H.11 — burn-in + cleanup**:
+   - Watch CF Web Analytics + `wrangler tail` for 24-48 h.
+   - After clean burn-in: `docker compose stop frontend` on the
+     droplet (keeps Python + Caddy + Redis running; the Express
+     container stays stopped as a paranoid rollback option).
+   - After 1 week clean: codify the route in `wrangler.toml`
+     (`[[routes]] pattern = "sports.unseen-university.org/*"`).
+2. **2E follow-on**: hashed-filename + 1-year `/assets/*`
+   cache-rule bump (deferred; nice-to-have).
+3. **2G follow-on**: Playwright preview-URL update + mobile
+   field test for the Lighthouse mobile thresholds.
 
-Two steps remain after that:
-
-1. **Push the branch** — fork-deploy.yml runs build + python-test
-   + docker compose deploy (the new compose binds python:7000 to
-   127.0.0.1 on the host) + Caddy snippet render/install/reload
-   + Playwright + Lighthouse.
-2. **Smoke** the workers.dev URL after CI is green:
-   ```
-   curl -s "https://sports.unseen-university.workers.dev/cfb/game/401520434?bust=$(date +%s)" \
-     | grep -oE "Win Probability|There is no play-by-play"
-   ```
-   `Win Probability` ⇒ Python is reachable through Caddy + the
-   shared-secret header. Then in CF dashboard → Workers & Pages
-   → `sports` → Settings → Domains & Routes → Add Custom Domain
-   → `sports.unseen-university.org` — the destructive flip.
-
-Rollback for the Custom Domain flip is one click in the same
-dashboard pane (remove the Custom Domain → traffic falls back
-to the still-running Express container on the droplet within
-~30 seconds).
-
-Other open items, lower priority:
-- **2E follow-on**: hashed-filename + 1-year `/assets/*`
-  cache-rule bump.
-- **2G follow-on**: Playwright preview-URL update.
+Phase 3 (Cloudflare Containers for Python) becomes the natural
+next phase after burn-in. The biggest remaining latency is the
+~4 s Python pipeline on cold game-page hits — Containers
+removes the droplet entirely (one bill, one platform) and
+opens the door to Phase 4 (TS + ONNX port).
 
 Sanity before starting:
 ```
@@ -1189,38 +1168,133 @@ sudo tail -f /var/log/caddy/python.access.log
 docker compose logs -f python
 ```
 
-##### 2H.9 USER ACTION — Workers Custom Domain (the destructive step)
+##### 2H.9 USER ACTION — flip routing (the destructive step) — DONE 2026-05-03
 
-In the Cloudflare dashboard:
+Originally written as "Add Workers Custom Domain". Custom Domain
+required deleting the existing `sports.unseen-university.org` A
+record first ("This domain is already in use"), which would have
+created a brief unresolvable-hostname window.
 
-1. Workers & Pages → `sports` worker → Settings → Domains &
-   Routes → Add → Custom Domain
-2. Domain: `sports.unseen-university.org`
-3. Click Add. CF auto-provisions the cert.
+**Switched to Workers Routes mid-cutover** because they (a) leave
+the existing DNS A record in place (one less moving part), and
+(b) make rollback a single-click delete-the-route with no DNS
+re-add. Used:
 
-Within ~30 seconds, `sports.unseen-university.org` starts
-routing to the Worker. The existing DNS A record is shadowed
-by the Custom Domain (still in place but unused).
+1. Workers & Pages → `sports` → Settings → Domains & Routes →
+   Add → **Route** (not Custom Domain).
+2. Zone: `unseen-university.org`. Route pattern:
+   `sports.unseen-university.org/*`.
+3. Click Add. The Worker starts handling all traffic for that
+   hostname within seconds.
 
-> **DESTRUCTIVE STEP**: confirm before clicking Add. Rollback
-> = remove the Custom Domain in the same dashboard pane.
-> ~30 seconds to apply.
+> **DESTRUCTIVE STEP done.** Rollback: delete the Route in the
+> same pane → existing A record routes back to droplet within
+> ~30 s.
 
-##### 2H.10 Post-cutover smoke
+##### 2H.10 Post-cutover smoke — DONE 2026-05-03
+
+All five checks green:
 
 ```
-# Worker is the origin now — verify cf-ray header indicates Worker
-curl -sI https://sports.unseen-university.org/cfb/glossary | grep -iE "server|x-powered|cf-ray|server-timing"
+# 1. Game route renders the full template against real PBP
+curl -s "https://sports.unseen-university.org/cfb/game/401520434?bust=$(date +%s)" \
+  | grep -oE "Win Probability|There is no play-by-play" | head -1
+# → "Win Probability" ✓
 
-# Real game data flows
-curl -s https://sports.unseen-university.org/cfb/game/401520434 | grep -c "Win Probability"
+# 2. Static Assets binding (edge-cached)
+curl -sI https://sports.unseen-university.org/assets/js/dashboard.js
+# → 200, content-type: text/javascript, cf-cache-status: HIT ✓
 
-# Asset serving still works
-curl -sI https://sports.unseen-university.org/assets/js/dashboard.js | grep -iE "HTTP|cf-cache"
+# 3. Server-Timing breakdown on cold game-page hit
+curl -sI "https://sports.unseen-university.org/cfb/game/401520434?bust=$(date +%s)" \
+  | grep -i server-timing
+# → cache_lookup;dur=13, espn_pbp;dur=59, python;dur=4045,
+#   percentiles;dur=10, render;dur=0, total;dur=4127 ✓
 
-# Worker route doesn't shadow the python subdomain (sanity)
-curl -sI https://python.unseen-university.org/cfb/process | head -1   # expect 403
+# 4. Scoreboard renders (~214 KB body, identical to *.workers.dev)
+curl -s https://sports.unseen-university.org/cfb/ | wc -c
+# → 214760 ✓
+
+# 5. Python proxy denies anonymous traffic (Caddy header gate works)
+curl -sI https://python.unseen-university.org/cfb/process | head -1
+# → HTTP/2 403 ✓
 ```
+
+##### 2H.10b Post-cutover performance — captured 2026-05-03
+
+**TTFB medians** (5 samples each, local laptop EST → CF edge):
+
+| Path | Express baseline | Express + Phase 1 | Worker (post-2H) | Δ vs baseline |
+|---|---:|---:|---:|---:|
+| `/cfb/` | 101 ms | 153 ms | **86 ms** | −15% |
+| `/cfb/year/2024/teams/differential` | 113 ms | 47 ms | **75 ms** | −34% |
+| `/cfb/glossary` | n/a | n/a | **54 ms** | new |
+
+`/cfb/year/...` regressed from 47 → 75 ms vs Phase 1 because the
+Phase 1 measurement was `cf-cache-status: DYNAMIC` from a still-
+busy Express path; the Worker path adds a Cache-API lookup +
+KV read + render that Express was bypassing on dynamic responses.
+Still 34% better than the original Express baseline.
+
+**Game page warm vs cold** (TTFB, ms):
+
+| | Pre-Phase-1 Express + Redis | Post-Phase-1 Express | Worker (post-2H) |
+|---|---:|---:|---:|
+| Cold cache | 560 (warm Redis hit) | 490 | 4400–5000 (Python pipeline) |
+| Warm cache | 560 | 490 | **51–77** |
+
+The cold-cache ~4500 ms reflects a real Python pipeline run end-
+to-end (Worker → CF edge → Caddy → Python). Express's "cold" path
+hit the still-warm Redis cache because Redis had a 60-s TTL and
+most measurements landed inside that window — comparing to it
+isn't apples-to-apples.
+
+The headline number is the **warm-cache TTFB drop from ~490 ms
+on Express to ~75 ms on the Worker** (6.5× faster on warm
+hits). The Cache API serves the rendered Response directly from
+CF edge with no origin round-trip — no Python, no Redis, no
+EJS render.
+
+**Cold game page Server-Timing breakdown** (median):
+
+```
+cache_lookup;dur=13   ← Cache API miss
+espn_pbp;dur=59       ← ESPN scoreboard probe (parallel, fast)
+python;dur=4045       ← Full Python /cfb/process pipeline
+percentiles;dur=10    ← KV read for percentile bands
+render;dur=0          ← JSX render is sub-millisecond
+total;dur=4127        ← end to end
+```
+
+Python is 98% of the cold-cache total. The Cache API turns this
+into 75 ms on every subsequent request for the same gameId.
+
+**Lighthouse desktop** (3 runs per URL, median):
+
+| Path | Baseline 2026-05-01 (Express) | Post-2H (Worker) | Δ |
+|---|---:|---:|---:|
+| `/cfb/` | perf 0.68 | **0.72** | +4 pp |
+| `/cfb/game/401403910` | perf 0.65 | **0.65** | flat |
+| `/cfb/year/2024/teams/differential` | perf 0.73 | **0.75** | +2 pp |
+
+Detailed median metrics post-2H:
+
+| Path | FCP | LCP | TBT | SI |
+|---|---:|---:|---:|---:|
+| `/cfb/` | 488 | 955 | 659 | 701 |
+| `/cfb/game/401403910` | 821 | 1131 | 707 | 1341 |
+| `/cfb/year/2024/teams/differential` | 588 | 699 | 636 | 693 |
+
+Modest improvements because Lighthouse desktop is dominated by
+client-side JS+CSS parsing, which the Worker doesn't change —
+same templates, same script tags. The Worker rewrite's wins are
+in TTFB and in the warm-cache path that Lighthouse cold-loads
+each run.
+
+Mobile field test deferred — Lighthouse desktop alone doesn't
+capture the mobile gain (gzip CPU savings + cache-hit response
+sizes hit harder on Slow 4G). Worth running before we tighten
+the lighthouserc thresholds.
 
 ##### 2H.11 Burn-in + cleanup (24-48h)
 
