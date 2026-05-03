@@ -82,18 +82,27 @@ USER ACTION step without confirmation from the user.**
     Express side); structured JSON `{event: "request", ...}` log
     line per response; ajv schema validator on Python responses
     (warn-only); Playwright preview-URL update deferred to 2H.
-  - 2H (cutover): **prep code shipped 2026-05-03** (Worker
-    sends X-Worker-Secret header, wrangler.toml points at
-    `python.sports.unseen-university.org`). Awaiting USER ACTION:
-    secret generation, Caddyfile edit on droplet, CF DNS
-    record, `wrangler secret put`, and the Custom Domain
-    click. Step-by-step runbook in the 2H section below.
-  - vitest suite: 141 assertions across 12 files, ~5.9 s.
+  - 2H (cutover): **prep complete 2026-05-03**. Worker sends
+    X-Worker-Secret header, wrangler.toml points at
+    `python.sports.unseen-university.org`, Caddy snippet codified
+    in `caddy/`, fork-deploy.yml renders + ships it on every
+    push (with self-healing conf.d setup so a fresh droplet
+    bootstraps cleanly). User has completed: secret generation,
+    droplet conf.d + import-line setup, GH Actions secret
+    `WORKER_SHARED_SECRET`, CF DNS record for
+    `python.sports.unseen-university.org`, `wrangler secret put`.
+    Pushing this branch is the next move — fork-deploy CI then
+    runs the docker compose deploy + Caddy bring-up
+    automatically. After CI green + smoke against
+    `*.workers.dev` shows real game data, the destructive
+    Custom Domain click in CF dashboard is the final flip.
+  - vitest suite: 143 assertions across 12 files, ~5.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-03 (Phase 2H — pre-cutover Worker
-  code prep landed; awaiting Caddy edit + DNS click + secret
-  to actually flip `sports.unseen-university.org`)
+- Last updated: 2026-05-03 (Phase 2H — all prep done; user
+  completed secret + DNS + GH/Wrangler secrets + droplet
+  conf.d setup. Branch ready to push and trigger CI bring-up;
+  Custom Domain click is the final destructive step)
 
 ### Next session entry point
 
@@ -111,27 +120,33 @@ Container investment now is too speculative. The bridge is
 throwaway; if maintainer says yes we eventually replace it
 with 3B, if they say no we drop the whole thing.
 
-**Phase 2H runbook is in the 2H section below.** The Caddy
-config is now codified in `caddy/python.sports.unseen-university.org.caddy`
-and ships through the existing fork-deploy.yml workflow — no
-more SSH-and-edit. The conf.d + import-line setup self-heals
-in CI, so a fresh droplet provision (Phase A → push) brings
-itself fully online with no manual SSH for the 2H bring-up.
-Steps remaining for the user:
+**Phase 2H — all prerequisite USER ACTION steps are done as of
+the 2026-05-03 checkpoint.** Secret generated, GH Actions secret
+set, droplet conf.d + import line in place (now also self-healed
+in CI for any future droplet rebuild), CF DNS record for
+`python.sports.unseen-university.org` added, Wrangler secret
+`WORKER_SHARED_SECRET` set on the worker.
 
-1. Generate the shared secret (`openssl rand -hex 32`).
-2. Add `WORKER_SHARED_SECRET` as a GitHub Actions repo secret.
-3. Add the `python.sports` DNS record in the CF dashboard
-   (proxied A record → droplet IP).
-4. Run `wrangler secret put WORKER_SHARED_SECRET` once locally.
-5. Push the branch — CI deploys the codified Caddy snippet
-   alongside the docker compose.
-6. Smoke against `*.workers.dev`, then add the Workers
-   Custom Domain for `sports.unseen-university.org`
-   (the actual destructive flip).
+Two steps remain:
 
-Rollback for step 6 is one click in the same dashboard pane
-(remove the Custom Domain → traffic falls back to droplet).
+1. **Push the branch** — fork-deploy.yml runs build + python-test
+   + docker compose deploy (the new compose binds python:7000 to
+   127.0.0.1 on the host) + Caddy snippet render/install/reload
+   + Playwright + Lighthouse.
+2. **Smoke** the workers.dev URL after CI is green:
+   ```
+   curl -s "https://sports.unseen-university.workers.dev/cfb/game/401520434?bust=$(date +%s)" \
+     | grep -oE "Win Probability|There is no play-by-play"
+   ```
+   `Win Probability` ⇒ Python is reachable through Caddy + the
+   shared-secret header. Then in CF dashboard → Workers & Pages
+   → `sports` → Settings → Domains & Routes → Add Custom Domain
+   → `sports.unseen-university.org` — the destructive flip.
+
+Rollback for the Custom Domain flip is one click in the same
+dashboard pane (remove the Custom Domain → traffic falls back
+to the still-running Express container on the droplet within
+~30 seconds).
 
 Other open items, lower priority:
 - **2E follow-on**: hashed-filename + 1-year `/assets/*`
