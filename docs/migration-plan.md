@@ -82,32 +82,25 @@ USER ACTION step without confirmation from the user.**
     Express side); structured JSON `{event: "request", ...}` log
     line per response; ajv schema validator on Python responses
     (warn-only); Playwright preview-URL update deferred to 2H.
-  - 2H (cutover): **DONE 2026-05-03 + summary follow-up
-    in-flight**. `sports.unseen-university.org` is now served
-    by the Cloudflare Worker end-to-end. Routing flipped via
-    Workers Route (not Custom Domain). Headline perf: warm
-    game-page TTFB 490 ms → 75 ms (6.5× faster). See 2H.10b
-    for full benchmark.
-
-    Burn-in caught a regression in leaderboards/charts — the
-    Worker still couldn't reach the cfb-team-summaries
-    container (same root cause as Python pre-2H.5b). Fix
-    shipped in code: `lib/summary.ts` refactored to take a
-    SummaryConfig (kv + base URL + secret) like fetchAndShapePBP,
-    new `caddy/summary.unseen-university.org.caddy` snippet,
-    `docker-compose.fork.yml` binds `summary:3000` to
-    `127.0.0.1:3000`, `wrangler.toml` `SUMMARY_BASE_URL` var.
-    Awaiting USER ACTION (2H.10c): generate Origin Cert for
-    `summary.unseen-university.org`, install on droplet, add
-    DNS, push.
+  - 2H (cutover): **DONE 2026-05-03**.
+    `sports.unseen-university.org` is now served by the
+    Cloudflare Worker end-to-end, and every route renders
+    real data. Game pages → Caddy → 127.0.0.1:7000 (Python).
+    Leaderboards / charts / team pages / pregame matchup →
+    Caddy → 127.0.0.1:3000 (cfb-team-summaries). Routing
+    flipped via Workers Route. Headline perf: warm game-page
+    TTFB 490 ms → 75 ms (6.5× faster); leaderboard warm hit
+    9 ms (KV-cached). See 2H.10b for full benchmark, 2H.10c
+    for the post-burn-in summary-service follow-up that
+    closed the leaderboard/charts gap.
   - vitest suite: 143 assertions across 12 files, ~5.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-03 (Phase 2H cutover DONE; summary-
-  service follow-up code shipped, awaiting USER ACTION 2H.10c
-  — generate Origin Cert for `summary.unseen-university.org` +
-  scp install + add DNS + push, then leaderboards/charts work
-  end-to-end too)
+- Last updated: 2026-05-03 (Phase 2H DONE end-to-end — every
+  route on `sports.unseen-university.org` serves real data
+  through the Worker; game pages via Python proxy, leaderboards
+  /charts/team pages via summary proxy. Burn-in window now
+  open; all open work is the 2H.11 cleanup list)
 
 ### Next session entry point
 
@@ -125,25 +118,21 @@ Container investment now is too speculative. The bridge is
 throwaway; if maintainer says yes we eventually replace it
 with 3B, if they say no we drop the whole thing.
 
-**Phase 2 is essentially done.** `sports.unseen-university.org`
-is live on the Worker as of 2026-05-03. Game pages render real
-PBP end-to-end. Smoke + Lighthouse captured (see 2H.10 / 2H.10b
-in Notes).
+**Phase 2 is fully done.** `sports.unseen-university.org` is
+live on the Worker, and every route serves real data:
+- game pages → Caddy → 127.0.0.1:7000 (Python pipeline)
+- leaderboards / players / trends / EPA chart / team pages /
+  pregame matchup → Caddy → 127.0.0.1:3000 (cfb-team-summaries)
+- assets → Workers Static Assets binding (edge-cached)
 
-**One follow-up still in-flight (2H.10c)**: leaderboards and
-charts render empty because the summary service was hardcoded
-to `http://summary:3000` (Docker-internal). Same root cause and
-same fix shape as Python — code shipped, USER ACTION pending
-to generate the Origin Cert + add DNS + push. See 2H.10c for
-the runbook. After that, every route works end-to-end.
-
-Burn-in window can run in parallel with 2H.10c.
+Smoke + Lighthouse captured (see 2H.10 / 2H.10b in Notes).
+Summary follow-up post-burn-in fix captured in 2H.10c (the
+same shape as the Python proxy — secret-gated Caddy vhost +
+dedicated Origin Cert).
 
 Open follow-ups, in priority order:
 
-1. **2H.10c — summary service follow-up**: generate cert, add
-   DNS, push. ~10 minutes of dashboard work.
-2. **2H.11 — burn-in + cleanup**:
+1. **2H.11 — burn-in + cleanup** (next session start):
    - Watch CF Web Analytics + `wrangler tail` for 24-48 h.
    - After clean burn-in: `docker compose stop frontend` on the
      droplet (keeps Python + Caddy + Redis running; the Express
@@ -1315,7 +1304,7 @@ capture the mobile gain (gzip CPU savings + cache-hit response
 sizes hit harder on Slow 4G). Worth running before we tighten
 the lighthouserc thresholds.
 
-##### 2H.10c Summary service follow-up (caught during burn-in 2026-05-03)
+##### 2H.10c Summary service follow-up — DONE 2026-05-03
 
 Smoke missed it: leaderboards (`/cfb/year/:year/teams/:type`,
 `/cfb/year/:year/players/:type`), trends + EPA chart
@@ -1361,9 +1350,32 @@ USER ACTION steps (mirror 2H.5b):
 5. **Smoke** the leaderboard:
    ```
    curl -s https://sports.unseen-university.org/cfb/year/2024/teams/differential \
-     | grep -c '<tr>'
-   # ~130 with data, 1 without
+     | grep -oc '<tr'
+   # ~135 with data, 1 without
    ```
+   (Note: use `grep -oc '<tr'` not `grep -c '<tr>'` — Hono JSX
+   renders rows with no newlines between them, so `-c`
+   line-counts everything as 1.)
+
+6. **Verification done 2026-05-03 post-deploy** — every
+   route confirmed serving real data:
+
+   | Route | Result |
+   |---|---|
+   | `/cfb/year/2024/teams/differential` | 135 `<tr` tags (1 header + 134 teams) |
+   | `/cfb/year/2024/players/passing` | 123 `<tr` tags |
+   | `/cfb/charts/trends?json=1` | full percentile array, all years 2014-2025 |
+   | `/cfb/year/2024/charts/team/epa` | 41 KB body, per-team adjOffEpa/adjDefEpa inlined |
+   | `/cfb/year/2024/team/61` | 603 KB body (full template render) |
+   | `/cfb/game/401520434` | full Game template (verified earlier in 2H.10) |
+
+   Server-Timing on a warm leaderboard hit: `total;dur=9` (KV
+   cache hit, no upstream call). Cold hits go through the
+   summary path the same way the cold game-page hit goes
+   through python.
+
+> **2H.10c CLOSED.** Phase 2 cutover is fully done; every
+> route serves real data through the Worker.
 
 ##### 2H.11 Burn-in + cleanup (24-48h)
 
