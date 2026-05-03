@@ -4,8 +4,7 @@ import {
   QUARANTINE_LIST,
   calculateGEI,
   cleanName,
-  getPBP,
-  peekCachedPBP,
+  fetchAndShapePBP,
 } from "../src/lib/games";
 
 afterEach(() => {
@@ -24,6 +23,13 @@ async function clearKv() {
   const k2 = await env.SUMMARY_LAST_UPDATED.list();
   for (const k of k2.keys) await env.SUMMARY_LAST_UPDATED.delete(k.name);
 }
+
+// Each test that exercises the route uses a unique gameId so its
+// cache key (the full request URL) doesn't collide with another
+// test's cached entry. caches.default is workers-runtime-mocked and
+// shared across the test file otherwise.
+let nextGameId = 401900000;
+const uniqueGameId = (): string => String(nextGameId++);
 
 const sampleGameInfo = (overrides: Record<string, unknown> = {}) => ({
   id: "401628412",
@@ -99,56 +105,36 @@ describe("games lib", () => {
     });
   });
 
-  describe("getPBP / peekCachedPBP", () => {
-    beforeEach(async () => {
-      await clearKv();
-    });
-
-    it("returns the KV-cached payload without hitting Python", async () => {
-      const sample = { gameInfo: { status: { type: { completed: true } } }, plays: [] };
-      await env.LEAGUE_DATA.put("cfb-game-401001", JSON.stringify(sample));
-      const fetchSpy = vi.spyOn(globalThis, "fetch");
-      const data = await getPBP(env.LEAGUE_DATA, "http://python:7000", "401001");
-      expect(data).toEqual(sample);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    });
-
-    it("calls Python on cache miss and writes through to KV", async () => {
+  describe("fetchAndShapePBP", () => {
+    it("calls Python and reshapes the response (advBoxScore, scoringPlays, gameInfo from header)", async () => {
       const pythonResponse = {
         plays: [],
-        boxScore: {},
-        box_score: {},
-        header: { season: { year: 2024 }, competitions: [{ status: { type: { completed: false } } }] },
+        boxScore: { players: [] },
+        box_score: { team: [] },
+        header: {
+          season: { year: 2024 },
+          competitions: [{ status: { type: { completed: false } } }],
+        },
         homeTeamId: "61",
         awayTeamId: "333",
       };
-      const fetchSpy = vi
-        .spyOn(globalThis, "fetch")
-        .mockImplementation(async () => jsonResponse(pythonResponse));
-      const data = await getPBP(env.LEAGUE_DATA, "http://python:7000", "401002");
-      expect(data).not.toBeNull();
-      expect(data!.gameInfo?.status?.type?.completed).toBe(false);
-      expect(fetchSpy).toHaveBeenCalledOnce();
-      const cached = await env.LEAGUE_DATA.get("cfb-game-401002");
-      expect(cached).not.toBeNull();
-      // The reshape should have stripped box_score and added scoringPlays.
-      const parsed = JSON.parse(cached!) as { box_score?: unknown; scoringPlays?: unknown };
-      expect(parsed.box_score).toBeUndefined();
-      expect(Array.isArray(parsed.scoringPlays)).toBe(true);
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse(pythonResponse));
+      const data = await fetchAndShapePBP("http://python:7000", "401002");
+      expect(data.gameInfo?.status?.type?.completed).toBe(false);
+      expect(Array.isArray(data.scoringPlays)).toBe(true);
+      // box_score (snake) gets renamed to advBoxScore and removed from
+      // the top-level shape — templates read advBoxScore exclusively.
+      expect((data as { box_score?: unknown }).box_score).toBeUndefined();
+      expect(data.advBoxScore).toEqual({ team: [] });
     });
 
-    it("returns null when Python fails", async () => {
+    it("throws when Python returns non-2xx (caller renders game_error)", async () => {
       vi.spyOn(globalThis, "fetch").mockImplementation(
         async () => new Response("nope", { status: 503 }),
       );
-      const data = await getPBP(env.LEAGUE_DATA, "http://python:7000", "401003");
-      expect(data).toBeNull();
-    });
-
-    it("peekCachedPBP returns null on cache miss and the parsed payload on hit", async () => {
-      expect(await peekCachedPBP(env.LEAGUE_DATA, "missing")).toBeNull();
-      await env.LEAGUE_DATA.put("cfb-game-hit", JSON.stringify({ gameInfo: {} }));
-      expect(await peekCachedPBP(env.LEAGUE_DATA, "hit")).toEqual({ gameInfo: {} });
+      await expect(fetchAndShapePBP("http://python:7000", "401003")).rejects.toThrow(
+        /returned 503/,
+      );
     });
 
     it("pins the last play's WP after to 1.0 on a completed game where home wins", async () => {
@@ -167,86 +153,131 @@ describe("games lib", () => {
         awayTeamId: "333",
       };
       vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse(pythonResponse));
-      const data = await getPBP(env.LEAGUE_DATA, "http://python:7000", "401004");
-      expect(data!.plays![0].winProbability!.after).toBe(1.0);
+      const data = await fetchAndShapePBP("http://python:7000", "401004");
+      expect(data.plays![0].winProbability!.after).toBe(1.0);
     });
   });
 });
 
-describe("/cfb/game/:gameId route", () => {
+describe("/cfb/game/:gameId route (Cache API era)", () => {
   beforeEach(async () => {
     await clearKv();
   });
 
-  it("returns cached completed payload as JSON when ?json=1 (no Python or ESPN call)", async () => {
-    const sample = {
-      gameInfo: sampleGameInfo(),
-      header: { season: { year: 2024 } },
-      plays: [],
-      scoringPlays: [],
-    };
-    await env.LEAGUE_DATA.put("cfb-game-401628412", JSON.stringify(sample));
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const res = await SELF.fetch("http://localhost/cfb/game/401628412?json=1");
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { gameInfo: { id: string } };
-    expect(body.gameInfo.id).toBe("401628412");
-    expect(fetchSpy).not.toHaveBeenCalled();
+  // Helper: bare-minimum Python response shape with one realistic
+  // play so the full Game template can render without throwing.
+  const pythonPbpResponse = (overrides: Record<string, unknown> = {}) => ({
+    plays: [
+      {
+        game_play_number: 1,
+        period: 1,
+        pos_team: "61",
+        clock: { displayValue: "12:34", minutes: "12", seconds: "34" },
+        type: { text: "Pass Reception" },
+        text: "Carson Beck 22 yard pass to Arian Smith for a TD",
+        scoringPlay: true,
+        homeScore: 7,
+        awayScore: 0,
+        pass: 1,
+        start: {
+          down: 1,
+          distance: 10,
+          yardsToEndzone: 22,
+          pos_team: { id: "61" },
+          team: { id: "61" },
+          pos_team_score: 0,
+          def_pos_team_score: 0,
+        },
+        end: { yardsToEndzone: 0, team: { id: "61" } },
+        expectedPoints: { added: 4.2, before: 1.8, after: 6.0 },
+        winProbability: { added: 0.15, before: 0.45, after: 0.6 },
+        EPA: 4.2,
+        "drive.id": "1",
+      },
+    ],
+    boxScore: {},
+    box_score: { team: [], situational: [], drives: [], defensive: [], turnover: [] },
+    drives: { previous: [], current: null },
+    header: {
+      season: { year: 2024 },
+      competitions: [sampleGameInfo()],
+    },
+    homeTeamId: "61",
+    awayTeamId: "333",
+    ...overrides,
   });
 
-  it("renders the full Game page on a cached completed payload", async () => {
-    // Minimal-but-realistic play shape — the play table needs
-    // start/end blocks, and the drives section needs `drive.id`.
-    const samplePlay = {
-      game_play_number: 1,
-      period: 1,
-      pos_team: "61",
-      clock: { displayValue: "12:34", minutes: "12", seconds: "34" },
-      type: { text: "Pass Reception" },
-      text: "Carson Beck 22 yard pass to Arian Smith for a TD",
-      scoringPlay: true,
-      homeScore: 7,
-      awayScore: 0,
-      pass: 1,
-      start: {
-        down: 1,
-        distance: 10,
-        yardsToEndzone: 22,
-        pos_team: { id: "61" },
-        team: { id: "61" },
-        pos_team_score: 0,
-        def_pos_team_score: 0,
-      },
-      end: { yardsToEndzone: 0, team: { id: "61" } },
-      expectedPoints: { added: 4.2, before: 1.8, after: 6.0 },
-      winProbability: { added: 0.15, before: 0.45, after: 0.6 },
-      EPA: 4.2,
-      "drive.id": "1",
-    };
-    const sample = {
-      gameInfo: sampleGameInfo(),
-      header: { season: { year: 2024 } },
-      plays: [samplePlay],
-      scoringPlays: [samplePlay],
-      advBoxScore: { team: [], situational: [], drives: [], defensive: [], turnover: [] },
-      drives: { previous: [], current: null },
-    };
-    await env.LEAGUE_DATA.put("cfb-game-401628412", JSON.stringify(sample));
-    const res = await SELF.fetch("http://localhost/cfb/game/401628412");
+  // Two-call mock: ESPN probe first, Python second. Returns a spy
+  // so callers can assert call count / argument shapes.
+  function mockEspnThenPython(
+    gameInfo: ReturnType<typeof sampleGameInfo> | undefined,
+    pythonBody: ReturnType<typeof pythonPbpResponse>,
+  ) {
+    return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("cdn.espn.com/core/college-football/playbyplay")) {
+        const competition = gameInfo ?? sampleGameInfo();
+        return jsonResponse(espnEnvelope({ competitions: [competition] }));
+      }
+      if (url.includes("/cfb/process")) {
+        return jsonResponse(pythonBody);
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+  }
+
+  it("renders the full Game page on a successful Python fetch", async () => {
+    const id = uniqueGameId();
+    mockEspnThenPython(undefined, pythonPbpResponse());
+    const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain("Scoring Plays");
     expect(body).toContain("Carson Beck");
-    // The full template carries the navigation scroller into the
-    // win-probability + drives sections — chrome we can rely on.
     expect(body).toContain("Win Probability");
-    expect(body).toContain("Drives");
-    // The data island must surface so the existing /assets/js
-    // dashboard.js can pick up the WP/EP charts.
     expect(body).toContain("var gameData =");
   });
 
-  it("scheduled game routes to pregame template", async () => {
+  it("completed games set the long s-maxage Cache-Control", async () => {
+    const id = uniqueGameId();
+    mockEspnThenPython(undefined, pythonPbpResponse());
+    const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
+    expect(res.headers.get("cache-control")).toBe(
+      "public, max-age=86400, s-maxage=31536000",
+    );
+  });
+
+  it("in-progress games set 30s Cache-Control", async () => {
+    const id = uniqueGameId();
+    const inProgressGameInfo = sampleGameInfo({
+      status: { type: { name: "STATUS_IN_PROGRESS", completed: false, detail: "Q3 5:21" } },
+    });
+    const inProgressPython = pythonPbpResponse({
+      header: {
+        season: { year: 2024 },
+        competitions: [inProgressGameInfo],
+      },
+    });
+    mockEspnThenPython(inProgressGameInfo, inProgressPython);
+    const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
+    expect(res.headers.get("cache-control")).toBe("public, max-age=30, s-maxage=30");
+  });
+
+  it("?json=1 returns JSON with the same Cache-Control as the HTML variant", async () => {
+    const id = uniqueGameId();
+    mockEspnThenPython(undefined, pythonPbpResponse());
+    const res = await SELF.fetch(`https://example.com/cfb/game/${id}?json=1`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(res.headers.get("cache-control")).toBe(
+      "public, max-age=86400, s-maxage=31536000",
+    );
+    const body = (await res.json()) as { gameInfo: { id: string } };
+    expect(body.gameInfo.id).toBe("401628412");
+  });
+
+  it("scheduled game routes to pregame template (cached 5 min)", async () => {
+    const id = uniqueGameId();
     const scheduled = sampleGameInfo({
       status: { type: { name: "STATUS_SCHEDULED", completed: false, detail: "Sat 7:30 PM" } },
     });
@@ -258,27 +289,31 @@ describe("/cfb/game/:gameId route", () => {
       // summary POSTs for the two breakdowns.
       return jsonResponse({ results: [] });
     });
-    const res = await SELF.fetch("http://localhost/cfb/game/401628412");
+    const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
     expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("public, max-age=300, s-maxage=300");
     const body = await res.text();
-    // Pregame template renders the matchup section and "view the
-    // full preview page" link.
     expect(body).toMatch(/view the full preview page/);
   });
 
-  it("quarantined gameId returns the quarantine error template", async () => {
-    // 401411157 is in QUARANTINE_LIST. Cache miss → ESPN probe →
-    // quarantine branch.
+  it("quarantined gameId returns the quarantine error template (cached 1 day)", async () => {
+    // 401411157 is in QUARANTINE_LIST. Quarantine branch runs first
+    // now (post-2D), so ESPN is hit only to get gameInfo for the
+    // error header.
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       jsonResponse(espnEnvelope()),
     );
-    const res = await SELF.fetch("http://localhost/cfb/game/401411157");
+    const res = await SELF.fetch("https://example.com/cfb/game/401411157");
     expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe(
+      "public, max-age=86400, s-maxage=86400",
+    );
     const body = await res.text();
     expect(body).toContain("quarantined due to issues with underlying ESPN data");
   });
 
-  it("Python failure on a non-quarantined game routes to game_error pbp branch", async () => {
+  it("Python failure on a non-quarantined game routes to game_error pbp branch (NOT cached)", async () => {
+    const id = uniqueGameId();
     let firstCall = true;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = typeof input === "string" ? input : (input as Request).url;
@@ -286,20 +321,37 @@ describe("/cfb/game/:gameId route", () => {
         firstCall = false;
         return jsonResponse(espnEnvelope());
       }
-      // Subsequent fetch is the Python /cfb/process call → 503.
       return new Response("python down", { status: 503 });
     });
-    const res = await SELF.fetch("http://localhost/cfb/game/401628412");
+    const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
     expect(res.status).toBe(200);
+    // Error responses go through Hono's c.html() and intentionally
+    // do NOT carry our Cache-Control — they're not put into the cache.
+    expect(res.headers.get("cache-control")).not.toBe(
+      "public, max-age=86400, s-maxage=31536000",
+    );
     const body = await res.text();
     expect(body).toContain("There is no play-by-play data available for this game");
   });
 
   it("returns 500 when ESPN itself fails (envelope-less, can't render error page)", async () => {
+    const id = uniqueGameId();
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async () => new Response("nope", { status: 503 }),
     );
-    const res = await SELF.fetch("http://localhost/cfb/game/9999999");
+    const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
     expect(res.status).toBe(500);
   });
+
+  // Cross-request cache hit (worker writes via cache.put, subsequent
+  // SELF.fetch should serve from cache.match) is not asserted here.
+  // The vitest-pool-workers test pool runs the worker under SELF in
+  // a separate isolate from the test runner; caches.default in each
+  // isolate is a distinct backing store, so the worker's cache.put
+  // is invisible to the test's caches.default.match. The behavior
+  // is correct in production — the Cache-Control headers asserted
+  // by the per-branch tests above tell the CDN how long to keep
+  // each response. End-to-end cache-hit verification happens at
+  // sub-phase 2H smoke time via `cf-cache-status: HIT` on a curl
+  // against the deployed Worker.
 });

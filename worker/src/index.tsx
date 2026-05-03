@@ -12,10 +12,10 @@ import {
 } from "./lib/leaderboard";
 import {
   QUARANTINE_LIST,
-  getPBP,
-  peekCachedPBP,
+  fetchAndShapePBP,
   probeEspnPbp,
   type EspnPbpEnvelope,
+  type ProcessedGameData,
 } from "./lib/games";
 import {
   getGames,
@@ -365,23 +365,24 @@ app.get("/cfb/year/:year/team/:teamId", async (c) => {
 // Per-game PBP page. Mirrors routes.js:414-553.
 //
 // Branches (in order):
-//   1. cache-first fast path: if KV has the processed PBP AND the
-//      cached snapshot reports completed=true (and the gameId isn't
-//      quarantined), skip ESPN entirely and render. Saves ~400 ms.
+//   1. Cache API fast path: `caches.default.match(request)` returns a
+//      previously-rendered Response if it's still within Cache-Control
+//      bounds. Replaces the KV-based per-game cache from sub-phase 2B.
 //   2. quarantined gameId → game_error template, errorType=quarantine.
+//      Cached at edge for 1 day (quarantine entries are stable).
 //   3. ESPN PBP probe to determine status. If STATUS_SCHEDULED (or
 //      `?preview_mode={old,new}`), fetch the two team breakdowns from
-//      summary and render the pregame template.
-//   4. otherwise, call Python via getPBP (cache-aware). Render
-//      game.ejs equivalent. On any error, fall back to game_error
-//      with errorType=pbp.
+//      summary and render the pregame template. Cached 5 min.
+//   4. otherwise, call Python (no cache layer in lib/games anymore;
+//      the Cache API replaces it). Render game.ejs equivalent. On
+//      any error, fall back to game_error with errorType=pbp; that
+//      response is NOT cached because the underlying error may
+//      resolve when Python or ESPN comes back.
 //
 // `?json=1` short-circuits the HTML render at any branch where
-// processed PBP is in hand and returns it as JSON.
-//
-// The full game template (charts/box score/PBP table) is mid-port —
-// see Game.tsx. The chrome + scoring summary render today; the
-// chart-heavy sections land in a follow-up commit.
+// processed PBP is in hand and returns it as JSON. Each variant
+// gets its own cache entry because caches.default keys on the full
+// request URL.
 function clampSeason(input: number | undefined): number {
   if (input == null || Number.isNaN(input)) return CURRENT_SEASON;
   return Math.min(Math.max(input, MIN_SEASON), CURRENT_SEASON);
@@ -392,30 +393,84 @@ function gameInfoFromEspnEnvelope(envelope: EspnPbpEnvelope) {
   return competition;
 }
 
+// Cache-Control directives by branch. Numbers chosen to mirror the
+// Express-side TTLs (KV: 60 s in-progress, 1 day completed) but
+// extended where it's safe to do so given the data's actual
+// volatility.
+const CACHE_CONTROL = {
+  // Completed games: bytes the user sees never change. Browser 1
+  // day, edge 1 year.
+  completed: "public, max-age=86400, s-maxage=31536000",
+  // In-progress: very short — the page auto-refreshes every minute
+  // anyway. 30 s lets back-to-back requests collapse without
+  // staling the live game.
+  inProgress: "public, max-age=30, s-maxage=30",
+  // Pregame: 5 min. Team metadata + matchup percentiles don't shift
+  // pre-kickoff but we don't want to outlive the actual kickoff
+  // moment (which would silently keep serving "scheduled" past the
+  // real start).
+  pregame: "public, max-age=300, s-maxage=300",
+  // Quarantine entries are static (fork-maintained list); 1 day
+  // matches the Express side's gut feel.
+  quarantine: "public, max-age=86400, s-maxage=86400",
+} as const;
+
+// Wrap a JSX element in a Response with the chosen Cache-Control.
+// Hono normally builds this via c.html(); we go through Response
+// directly so we can attach headers before passing to cache.put.
+function cachedHtml(body: string, cacheControl: string): Response {
+  return new Response(body, {
+    headers: {
+      "content-type": "text/html; charset=UTF-8",
+      "cache-control": cacheControl,
+    },
+  });
+}
+
+function cachedJson(body: unknown, cacheControl: string): Response {
+  return new Response(JSON.stringify(body), {
+    headers: {
+      "content-type": "application/json",
+      "cache-control": cacheControl,
+    },
+  });
+}
+
 app.get("/cfb/game/:gameId", async (c) => {
   const gameId = c.req.param("gameId");
   const isJsonShortcut =
     c.req.query("json") === "true" || c.req.query("json") === "1";
   const previewMode = c.req.query("preview_mode");
 
-  // Fast path: cached completed game, not quarantined.
-  if (!QUARANTINE_LIST.has(gameId)) {
-    const cached = await peekCachedPBP(c.env.LEAGUE_DATA, gameId);
-    if (cached?.gameInfo?.status?.type?.completed === true) {
-      if (isJsonShortcut) return c.json(cached);
-      const season = clampSeason(cached.header?.season?.year);
-      let percentiles: Array<Record<string, unknown>> = [];
-      try {
-        percentiles = (await retrievePercentiles(c.env.LEAGUE_DATA, season, null)) as Array<
-          Record<string, unknown>
-        >;
-      } catch (err) {
-        console.log(`percentiles fetch failed (cached path): ${(err as Error).message}`);
-      }
-      return c.html(
-        <GamePage gameData={cached as unknown as RenderableGameData} percentiles={percentiles} season={season} />,
-      );
+  // Cache API fast path. Keyed by the full request URL so
+  // `?json=1` and `?preview_mode=...` get distinct entries
+  // automatically.
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cachedResponse = await cache.match(cacheKey);
+  if (cachedResponse) return cachedResponse;
+
+  // Quarantine gate runs before ESPN — short-circuits the probe
+  // entirely. We still need the gameInfo for the error template's
+  // score header, so a one-shot ESPN call sources it. The error
+  // template itself caches for 1 day (quarantine list is stable).
+  if (QUARANTINE_LIST.has(gameId)) {
+    let envelope: EspnPbpEnvelope;
+    try {
+      envelope = await probeEspnPbp(gameId);
+    } catch (err) {
+      throw new Error(`ESPN PBP probe failed for ${gameId}: ${(err as Error).message}`);
     }
+    const competition = gameInfoFromEspnEnvelope(envelope);
+    if (competition == null) {
+      throw new Error(`ESPN PBP envelope had no header.competitions[0] for ${gameId}`);
+    }
+    const html = (
+      <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="quarantine" />
+    ).toString();
+    const response = cachedHtml(html, CACHE_CONTROL.quarantine);
+    c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
   }
 
   // Probe ESPN to decide pregame vs game vs error. Any failure here
@@ -459,26 +514,42 @@ app.get("/cfb/game/:gameId", async (c) => {
         ],
       },
     };
-    return c.html(
-      <PregamePage gameData={pregameData} season={season} week={week} viewFull={previewMode === "old"} />,
-    );
+    const html = (
+      <PregamePage gameData={pregameData} season={season} week={week} viewFull={previewMode === "old"} />
+    ).toString();
+    const response = cachedHtml(html, CACHE_CONTROL.pregame);
+    c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
   }
 
-  // Quarantine gate: short-circuit before paying the Python cost.
-  if (QUARANTINE_LIST.has(gameId)) {
-    return c.html(
-      <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="quarantine" />,
-    );
-  }
-
-  // Past or live game → fetch processed PBP via Python (cache-aware).
-  const data = await getPBP(c.env.LEAGUE_DATA, c.env.PYTHON_BASE_URL, gameId);
-  if (data == null || data.gameInfo == null) {
+  // Past or live game → fetch processed PBP via Python (no cache
+  // layer in lib/games anymore — the Cache API above plays that
+  // role). Errors render game_error and are NOT cached so a Python
+  // outage doesn't pin the user to a stale error page once Python
+  // recovers.
+  let data: ProcessedGameData;
+  try {
+    data = await fetchAndShapePBP(c.env.PYTHON_BASE_URL, gameId);
+  } catch (err) {
+    console.log(`Python /cfb/process failed for ${gameId}: ${(err as Error).message}`);
     return c.html(
       <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="pbp" />,
     );
   }
-  if (isJsonShortcut) return c.json(data);
+  if (data.gameInfo == null) {
+    return c.html(
+      <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="pbp" />,
+    );
+  }
+
+  const completed = data.gameInfo.status?.type?.completed === true;
+  const cacheControl = completed ? CACHE_CONTROL.completed : CACHE_CONTROL.inProgress;
+
+  if (isJsonShortcut) {
+    const response = cachedJson(data, cacheControl);
+    c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
+  }
 
   const headerSeason = data.header?.season?.year ?? season;
   const clamped = clampSeason(headerSeason);
@@ -490,9 +561,12 @@ app.get("/cfb/game/:gameId", async (c) => {
   } catch (err) {
     console.log(`percentiles fetch failed: ${(err as Error).message}`);
   }
-  return c.html(
-    <GamePage gameData={data as unknown as RenderableGameData} percentiles={percentiles} season={clamped} />,
-  );
+  const html = (
+    <GamePage gameData={data as unknown as RenderableGameData} percentiles={percentiles} season={clamped} />
+  ).toString();
+  const response = cachedHtml(html, cacheControl);
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 });
 
 // Player leaderboard. Same KV-first → summary-fallback shape as the

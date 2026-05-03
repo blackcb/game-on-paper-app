@@ -54,27 +54,38 @@ USER ACTION step without confirmation from the user.**
     `game_error` in production until Python becomes reachable from
     the CF edge (sub-phase 3B Container binding or 2H cutover) —
     same posture as the prior commit.
-  - 2D (Cache API) / 2E (assets) / 2F (cron) / 2H (cutover): not started
-  - 2G (tests): 128 vitest assertions, ~2.9 s.
+  - 2D (Cache API): **completed 2026-05-03**. `caches.default`
+    keyed by request URL replaces the KV per-game cache from 2B.
+    Cache-Control varies by branch — completed games
+    `s-maxage=31536000`, in-progress 30 s, pregame 5 min,
+    quarantine 1 day; pbp/ESPN errors are NOT cached so they
+    auto-recover. `c.executionCtx.waitUntil(cache.put(...))` for
+    fire-and-forget writes. Production smoke confirmed
+    `cf-cache-status: HIT` on second hit for quarantine + pregame.
+  - 2E (assets) / 2F (cron) / 2H (cutover): not started
+  - 2G (tests): 128 vitest assertions, ~2.7 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-03 (Phase 2B — full game template port
-  completed; sub-phase 2B is now done end-to-end)
+- Last updated: 2026-05-03 (Phase 2D — Cache API for per-game PBP
+  completed; sub-phase 2D is now done end-to-end)
 
 ### Next session entry point
 
-End-of-day stop on 2026-05-03. Branch
-`instrument-plus-cloudflare-cdn`, last commit (post-port) on the
-Game.tsx full body. Working tree clean once the port is committed.
+Mid-day stop on 2026-05-03. Branch `instrument-plus-cloudflare-cdn`,
+two commits ahead of the prior checkpoint: 2B full template port
+(`6f14837`) and 2D Cache API. Working tree clean once 2D is
+committed.
 
-**Phase 2B is complete.** Pick up at sub-phase **2D — Cache API
-for per-game PBP** (replace KV per-game cache with `caches.default`
-keyed by URL; quarantine check moves into the Worker; in-progress
-games get `s-maxage=30`, completed games `s-maxage=31536000`).
-After 2D, the natural next steps are 2E (Workers Static Assets
-binding so `/assets/*` stops 404'ing in production — needed for
-the WP/EP/field charts to actually render) and 2F (cron-warmed
-scoreboard).
+**Phase 2D is complete.** Pick up at sub-phase **2E — Static
+assets**. Move `frontend/public/*` to `worker/public/*`, add the
+`[assets]` binding to `wrangler.toml`, and verify the WP/EP and
+field charts actually render against the deployed Worker (the
+JSON-island pattern is wired up but `/assets/js/*` 404s today).
+Optional follow-on inside 2E: hash filenames so the Phase 0
+1-hour `/assets/*` cache rule can be bumped to 1 year `immutable`.
+
+After 2E: 2F (cron-warmed scoreboard, ESPN scoreboard fetched
+every minute and written to KV; user routes read from KV first).
 
 Sanity before starting:
 ```
@@ -559,7 +570,9 @@ Port in this order (simplest first, biggest at the end):
   the templating approach works. Hono JSX `Layout` + `GlossaryPage`
   components reproduce the four EJS partials. 17 KB rendered, all 12
   letters + alphabetized terms + HTML-in-definitions intact.
-- ☐ Static redirects (`/cfb/teams`, `/cfb/players`, etc.).
+- ☑ Static redirects (`/cfb/teams`, `/cfb/players`, etc.). All
+  seven shipped with the leaderboard ports — see `index.tsx` and
+  the Status block above.
 - ☑ `/cfb/year/:year/teams/:type` (leaderboard) — exercises KV reads from
   the summary service. **Done 2026-05-02.** Helpers (`roundNumber`,
   `generateMarginalString`, `cleanRank`, `generateColorRampValue`,
@@ -693,19 +706,39 @@ For each route:
 - ☑ Add the bindings to `wrangler.toml`. Both are wired and the
   `Bindings` type in `worker/src/index.ts` references them so handlers
   get type-checked KV access.
-- ☐ Migrate the recursive-fallback summary fetch to a single KV-with-fetch
-  pattern: `kvCacheOr(key, ttl, () => fetchSummary(...))`.
+- ☑ Migrate the recursive-fallback summary fetch to a single
+  KV-with-fetch pattern. **Resolved without adding `kvCacheOr`.**
+  The four `retrieveX` helpers in `lib/summary.ts` already follow
+  one shape (cache get → JSON.parse → on miss/error, fetch remote
+  → KV write-through). Two of them (`retrieveLeagueData`,
+  `retrieveTeamData`) recurse on year-1 fallback for transient
+  summary-service failures, which doesn't compose cleanly with a
+  generic `kvCacheOr(key, ttl, fetch)` helper — the recursion
+  *is* the fallback, and threading retry state through a generic
+  helper hurts readability more than the dedup helps. The other
+  two (`retrievePercentiles`, `retrieveLastUpdated`) are already
+  ~5 lines each. Decision: leave the four functions as-is, drop
+  this task. Revisit if a fifth or sixth retrieve helper appears.
 
 #### 2D — Cache API for per-game PBP
 
-- ☐ Replace the per-game Redis (port 6380) with `caches.default` keyed by
-  the request URL. For completed games, use `Cache-Control: public,
-  max-age=86400, s-maxage=31536000` (browser 1 day, edge 1 year). For
-  in-progress games, `s-maxage=30`. Determined by checking
-  `gameInfo.status.type.completed`.
-- ☐ Implement the `QUARANTINE_LIST` check (currently
+- ☑ Replace the per-game Redis (port 6380) with `caches.default` keyed by
+  the request URL. **Done 2026-05-03.** Completed games:
+  `public, max-age=86400, s-maxage=31536000`. In-progress: 30 s.
+  Pregame: 5 min. Quarantine: 1 day. Pbp/ESPN errors NOT cached.
+  Drops `getPBP`/`peekCachedPBP` from `lib/games.ts`; the
+  `fetchAndShapePBP` fetcher is now public so the route can call
+  Python directly. Cache writes go through
+  `c.executionCtx.waitUntil(cache.put(...))` so the response is
+  not blocked on the put. Production smoke (curl ×2 against
+  `sports.unseen-university.workers.dev/cfb/game/401411157`):
+  second hit returns `cf-cache-status: HIT`.
+- ☑ Implement the `QUARANTINE_LIST` check (currently
   [routes.js:395-407](../frontend/cfb/routes.js)) inside the Worker and
   return the same `game_error` template, with `errorType: 'quarantine'`.
+  Done as part of the 2B route port — see `lib/games.ts`
+  `QUARANTINE_LIST` and the short-circuit in `index.tsx` for the
+  game route.
 
 #### 2E — Static assets
 
@@ -936,6 +969,60 @@ worker/
   wrangler.toml            ← name=sports, KV bindings
   vitest.config.mts        ← cloudflareTest plugin (Vitest 4)
 ```
+
+#### 2D Cache API for per-game PBP (2026-05-03)
+
+Replaces the KV-backed per-game cache from sub-phase 2B with
+`caches.default` keyed by the request URL. Per-branch
+Cache-Control:
+
+| Branch | Cache-Control | Reasoning |
+|---|---|---|
+| Completed game | `public, max-age=86400, s-maxage=31536000` | Bytes the user sees never change. Browser 1 day, edge 1 year. |
+| In-progress game | `public, max-age=30, s-maxage=30` | Page auto-refreshes every minute anyway; 30 s lets back-to-back requests collapse without staling the live game. |
+| Pregame | `public, max-age=300, s-maxage=300` | Team metadata + matchup percentiles don't shift pre-kickoff but we don't want the cached pregame to outlive the actual kickoff moment. |
+| Quarantine | `public, max-age=86400, s-maxage=86400` | Quarantine list is fork-maintained and stable. |
+| Pbp/ESPN error | (no header) | Underlying error may resolve when Python/ESPN comes back; never cached. |
+
+Implementation notes:
+- `lib/games.ts` shrunk: `getPBP` and `peekCachedPBP` deleted;
+  `fetchAndShapePBP` is now public (was internal). The route
+  calls Python directly and lets Cache API handle response caching.
+- The `?json=1` shortcut and HTML responses key on the same
+  request URL automatically — they get distinct cache entries
+  because the query string is part of the key.
+- Quarantine check moved to the top of the route. Previously it
+  ran after the ESPN probe; now it short-circuits before the
+  scheduled-game branch (still has to call ESPN once for the
+  gameInfo header). Subsequent requests are served from cache,
+  so the ESPN call is one-time per quarantined ID per cache TTL.
+- Cache writes go through `c.executionCtx.waitUntil(cache.put(...))`
+  so the response flows to the user immediately. Tests can't
+  observe cross-isolate cache hits in `@cloudflare/vitest-pool-workers`,
+  but Cache-Control assertions per branch + production smoke
+  (`cf-cache-status: HIT` on the second curl) verify the wiring.
+- KV namespaces (`LEAGUE_DATA`, `SUMMARY_LAST_UPDATED`) are
+  unchanged — they still back the league/team/percentiles
+  caches used by the leaderboards, scoreboard, and
+  pregame/game routes for percentile bands.
+
+Production smoke against `sports.unseen-university.workers.dev`:
+- `/cfb/game/401411157` (quarantined): first hit MISS, second
+  hit `cf-cache-status: HIT`, both with
+  `cache-control: public, max-age=86400, s-maxage=86400`.
+- `/cfb/game/401628412?preview_mode=new` (pregame): first hit
+  MISS, second hit `cf-cache-status: HIT`, both with
+  `cache-control: public, max-age=300, s-maxage=300`.
+- `/cfb/game/401520434` (Python unreachable → pbp error): no
+  `cache-control` header, `cf-cache-status` absent on both
+  hits — error responses correctly bypass the cache.
+
+**Resume hint**: pick up at sub-phase **2E — static assets**.
+Move `frontend/public/*` to `worker/public/*`, add `[assets]
+directory = "./public"` to `wrangler.toml`, verify the
+WP/EP/field charts render. The hashed-filename + 1-year
+`/assets/*` cache-rule bump can either land in 2E or be
+deferred to a later cleanup pass.
 
 #### 2A scaffolding (2026-05-02)
 

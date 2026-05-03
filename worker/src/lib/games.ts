@@ -1,19 +1,13 @@
-// Replaces frontend/cfb/games.js. Per-game PBP retrieval: cache-
-// first via KV, fallback to the Python `/cfb/process` service. The
-// Cache API migration that the migration plan calls "sub-phase 2D"
-// will replace KV here with `caches.default` keyed by URL — for 2B
-// we use the existing LEAGUE_DATA KV with a `cfb-game-${id}` key
-// prefix. The Express stack uses Redis instance 2 for the same role.
-
-const KV_KEY = (gameId: string | number): string => `cfb-game-${gameId}`;
-
-// In-progress games get a short TTL so the cached snapshot doesn't
-// outlive a quarter change; completed games get a long TTL because
-// nothing is going to update. Express uses 60 s for both;
-// consolidating to "60s when in-progress, 1d when final" matches the
-// access pattern better and saves Python cycles on completed games.
-const TTL_IN_PROGRESS_SECONDS = 60;
-const TTL_COMPLETED_SECONDS = 60 * 60 * 24;
+// Replaces frontend/cfb/games.js. Per-game PBP retrieval: calls the
+// Python `/cfb/process` service and reshapes the response into the
+// ProcessedGameData shape the templates expect. As of sub-phase 2D
+// the Worker no longer caches the JSON itself — `caches.default`
+// (keyed by request URL) caches the rendered Response upstream of
+// this module. Cache-Control set per-branch in the route handler
+// dictates TTL: long s-maxage for completed games, 30 s for
+// in-progress. The Express stack used Redis instance 2 for this
+// role; that role is now split between the Cache API (response
+// caching) and Python's own pipeline.
 
 // Game IDs whose ESPN payload reproducibly crashes the Python pipeline
 // (missing statYardage, broken drives, etc.). The Express side
@@ -124,8 +118,10 @@ interface ProcessResponse {
 // reshaped into the ProcessedGameData shape the templates expect:
 // plays array, derived gameInfo, scoring play subset, last-play WP
 // pinned to 1.0/0.0 for completed games, GEI computed for completed.
-// Mirrors games.js:129-171 (_remoteRetrievePBP).
-async function fetchAndShapePBP(
+// Mirrors games.js:129-171 (_remoteRetrievePBP). Public from sub-
+// phase 2D onwards — was wrapped by getPBP/peekCachedPBP in 2B
+// when KV was the cache layer.
+export async function fetchAndShapePBP(
   pythonBase: string,
   gameId: string | number,
 ): Promise<ProcessedGameData> {
@@ -170,64 +166,6 @@ async function fetchAndShapePBP(
     }
   }
   return pbp;
-}
-
-// Cache-first PBP fetcher. Mirrors games.js:173-187 (retrievePBP).
-// KV stand-in for the Express Redis layer; sub-phase 2D swaps in
-// the Cache API. Returns null on any unrecoverable error so the
-// caller can fall through to the game_error template.
-export async function getPBP(
-  kv: KVNamespace,
-  pythonBase: string,
-  gameId: string | number,
-): Promise<ProcessedGameData | null> {
-  const key = KV_KEY(gameId);
-  try {
-    const cached = await kv.get(key);
-    if (cached) {
-      try {
-        return JSON.parse(cached) as ProcessedGameData;
-      } catch {
-        // bad JSON — fall through to refetch
-      }
-    }
-  } catch (err) {
-    console.log(`KV read failed for ${key}: ${(err as Error).message}`);
-  }
-
-  let shaped: ProcessedGameData;
-  try {
-    shaped = await fetchAndShapePBP(pythonBase, gameId);
-  } catch (err) {
-    console.log(`Python /cfb/process failed for ${gameId}: ${(err as Error).message}`);
-    return null;
-  }
-
-  const completed = shaped.gameInfo?.status?.type?.completed === true;
-  const ttl = completed ? TTL_COMPLETED_SECONDS : TTL_IN_PROGRESS_SECONDS;
-  try {
-    await kv.put(key, JSON.stringify(shaped), { expirationTtl: ttl });
-  } catch (err) {
-    console.log(`KV write failed for ${key}: ${(err as Error).message}`);
-  }
-  return shaped;
-}
-
-// Lookup-only variant. Used by the route's cache-first fast path
-// for completed games — if KV has a hit AND the cached snapshot
-// reports completed=true, skip ESPN entirely. Mirrors the
-// `Games.getGameCacheValue` call in routes.js:436-460.
-export async function peekCachedPBP(
-  kv: KVNamespace,
-  gameId: string | number,
-): Promise<ProcessedGameData | null> {
-  try {
-    const cached = await kv.get(KV_KEY(gameId));
-    if (!cached) return null;
-    return JSON.parse(cached) as ProcessedGameData;
-  } catch {
-    return null;
-  }
 }
 
 // ESPN core PBP probe. Used to determine the game's pregame/in-progress
