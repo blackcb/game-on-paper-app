@@ -199,6 +199,17 @@ jobs:
               echo "::error::WORKER_SHARED_SECRET GitHub Actions secret is empty or unset"
               exit 1
             fi
+            # Self-heal the one-time droplet setup so a fresh
+            # provision (replica-deploy-plan.md Phase A → push
+            # this branch) doesn't require manual SSH for the
+            # 2H bring-up. Both commands are idempotent: mkdir
+            # -p is a no-op if the dir exists, and `grep -q ||`
+            # only appends the import line if it isn't already
+            # present.
+            sudo mkdir -p /etc/caddy/conf.d
+            sudo grep -q 'import conf.d' /etc/caddy/Caddyfile \
+              || echo 'import /etc/caddy/conf.d/*.caddy' \
+                 | sudo tee -a /etc/caddy/Caddyfile > /dev/null
             for src in /tmp/caddy-stage/*.caddy; do
               name=$(basename "$src")
               # envsubst rendered as the deploy user; sudo install

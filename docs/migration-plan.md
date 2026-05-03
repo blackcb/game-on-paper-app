@@ -114,22 +114,23 @@ with 3B, if they say no we drop the whole thing.
 **Phase 2H runbook is in the 2H section below.** The Caddy
 config is now codified in `caddy/python.sports.unseen-university.org.caddy`
 and ships through the existing fork-deploy.yml workflow — no
-more SSH-and-edit. Steps remaining for the user:
+more SSH-and-edit. The conf.d + import-line setup self-heals
+in CI, so a fresh droplet provision (Phase A → push) brings
+itself fully online with no manual SSH for the 2H bring-up.
+Steps remaining for the user:
 
 1. Generate the shared secret (`openssl rand -hex 32`).
-2. One-time droplet setup: `mkdir conf.d`, add `import` line
-   to existing Caddyfile, optional sudoers fragment.
-3. Add `WORKER_SHARED_SECRET` as a GitHub Actions repo secret.
-4. Add the `python` DNS record in the CF dashboard (proxied A
-   record → droplet IP).
-5. Run `wrangler secret put WORKER_SHARED_SECRET` once locally.
-6. Push the branch — CI deploys the codified Caddy snippet
+2. Add `WORKER_SHARED_SECRET` as a GitHub Actions repo secret.
+3. Add the `python.sports` DNS record in the CF dashboard
+   (proxied A record → droplet IP).
+4. Run `wrangler secret put WORKER_SHARED_SECRET` once locally.
+5. Push the branch — CI deploys the codified Caddy snippet
    alongside the docker compose.
-7. Smoke against `*.workers.dev`, then add the Workers
+6. Smoke against `*.workers.dev`, then add the Workers
    Custom Domain for `sports.unseen-university.org`
    (the actual destructive flip).
 
-Rollback for step 7 is one click in the same dashboard pane
+Rollback for step 6 is one click in the same dashboard pane
 (remove the Custom Domain → traffic falls back to droplet).
 
 Other open items, lower priority:
@@ -961,26 +962,25 @@ in both.
 > **USER ACTION**: Generate the secret, save it somewhere safe
 > (1Password / pass / similar).
 
-##### 2H.3 USER ACTION — one-time droplet setup for codified Caddy
+##### 2H.3 Droplet setup for codified Caddy — self-healing in CI
 
 The `caddy/python.sports.unseen-university.org.caddy` snippet ships
-through the existing fork-deploy.yml workflow. The deploy step
-expects two things to already exist on the droplet:
-
-1. `/etc/caddy/conf.d/` directory.
-2. An `import /etc/caddy/conf.d/*.caddy` line in the existing
-   `/etc/caddy/Caddyfile`.
-
-Run this once, via SSH:
+through the existing fork-deploy.yml workflow. The workflow's
+"Render + install Caddy snippets" step runs these two idempotent
+commands at the top of every deploy, so a fresh droplet
+(replica-deploy-plan.md Phase A → push this branch) gets the
+conf.d setup automatically:
 
 ```
 sudo mkdir -p /etc/caddy/conf.d
 sudo grep -q 'import conf.d' /etc/caddy/Caddyfile \
-  || echo 'import /etc/caddy/conf.d/*.caddy' \
-     | sudo tee -a /etc/caddy/Caddyfile
-sudo caddy validate --config /etc/caddy/Caddyfile
-sudo systemctl reload caddy
+  || echo 'import /etc/caddy/conf.d/*.caddy' | sudo tee -a /etc/caddy/Caddyfile
 ```
+
+If you want to verify the setup before pushing (or are bringing
+up a non-CI droplet), running the same commands manually via
+SSH is harmless — both short-circuit if the state is already
+in place.
 
 The deploy user (`secrets.DEPLOY_USER`) also needs passwordless
 sudo for `install`, `caddy validate`, and `systemctl reload caddy`.
@@ -994,8 +994,8 @@ echo "$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/install, /usr/bin/caddy, /bin/sy
 sudo chmod 440 /etc/sudoers.d/deploy-caddy
 ```
 
-> **USER ACTION**: SSH into the droplet, run the conf.d setup
-> + sudoers fragment if needed.
+> **USER ACTION**: only the sudoers fragment if it isn't already
+> set up. The conf.d + import line are now self-healed in CI.
 
 ##### 2H.4 USER ACTION — add WORKER_SHARED_SECRET to GitHub Actions
 
