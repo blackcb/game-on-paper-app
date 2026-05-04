@@ -96,11 +96,11 @@ USER ACTION step without confirmation from the user.**
   - vitest suite: 143 assertions across 12 files, ~5.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-03 (Phase 2H DONE end-to-end — every
-  route on `sports.unseen-university.org` serves real data
-  through the Worker; game pages via Python proxy, leaderboards
-  /charts/team pages via summary proxy. Burn-in window now
-  open; all open work is the 2H.11 cleanup list)
+- Last updated: 2026-05-04 (Phase 2H end-to-end live for a day;
+  added scoreboard catch for ESPN flakes, validated and
+  documented the `caches.default` per-PoP constraint —
+  Tiered Cache only pools standard cache, not Worker Cache
+  API. See Phase 2 Notes for both)
 
 ### Next session entry point
 
@@ -305,6 +305,11 @@ identically; only the hostname filter changes.
 
 **What was added in this Phase 0 pass**:
 - **Tiered Cache** → Smart Tiered Cache Topology enabled.
+  Important caveat — this applies to the standard CF cache
+  (Cache Rules), NOT to the Workers Cache API
+  (`caches.default`). See "2D — discovered constraint:
+  caches.default is per-PoP" in the Phase 2 Notes for the
+  empirical validation and implications.
 - **Cache Rules** (4 rules, all on `sports.unseen-university.org`):
   1. `assets-long-ttl`: URI Path starts with `/assets/` →
      edge 1h, browser 1d.
@@ -1622,6 +1627,106 @@ directory = "./public"` to `wrangler.toml`, verify the
 WP/EP/field charts render. The hashed-filename + 1-year
 `/assets/*` cache-rule bump can either land in 2E or be
 deferred to a later cleanup pass.
+
+#### 2D — discovered constraint: `caches.default` is per-PoP (validated 2026-05-04)
+
+**TL;DR**: Workers' `caches.default` is *per-PoP*, even with
+Smart Tiered Cache enabled at the zone level. Tiered Cache
+applies to the standard CF cache layer that sits in front of
+Workers (driven by Cache Rules), NOT to the Cache API the
+Worker code accesses directly via `caches.default`. Validated
+empirically on 2026-05-04.
+
+**Why this matters**: the assumption going into 2D was that
+Tiered Cache (enabled in Phase 0) would pool game-page
+responses globally — i.e. once one viewer warmed any PoP, every
+other PoP would pull the response from a regional upper-tier
+PoP rather than re-running the Worker against origin. That
+assumption was wrong. Each PoP that receives a fresh request
+runs the Worker against origin (Python), even if many other
+PoPs already have the response cached.
+
+**Test methodology**:
+
+1. Started `wrangler tail --format json` capturing every Worker
+   invocation.
+2. Picked a unique URL with a timestamped query string
+   (`/cfb/game/<quarantined-id>?bust=tieredtest-<unix>`) so it
+   couldn't be cached anywhere yet. Quarantined ID specifically
+   so the cold render is a fast ESPN probe (~300 ms) without a
+   Python pipeline call — fits inside check-host.net's probe
+   timeout.
+3. Hit the URL from a single laptop (cf-ray showed `ATL` PoP)
+   to warm one PoP.
+4. Triggered `check-host.net/check-http` against the same URL
+   from 10 globally-distributed nodes (UAE / Switzerland /
+   Israel / India / Lithuania / Moldova / Singapore / Ukraine /
+   Dallas / Atlanta).
+5. Read each invocation's structured request log
+   (`event:request` JSON line emitted by `lib/timing.ts`
+   middleware). Cache HITs show only `cache_lookup_ms` and
+   `total_ms`; MISSes also carry `espn_pbp_ms` (the cold-render
+   signature for a quarantine response).
+
+**Results**: 10 Worker invocations across 9 distinct PoPs.
+Only one HIT — when check-host.net's Atlanta node hit the same
+PoP the laptop had already warmed. Every other PoP went to
+origin.
+
+| PoP | Source | total_ms | espn_pbp_ms | Verdict |
+|---|---|---:|---:|---|
+| ATL | laptop (warm) | 600 | 575 | MISS (initial fill) |
+| ATL | check-host Atlanta | 3 | — | **HIT** (same-PoP warm) |
+| DFW | check-host Dallas | 202 | 184 | MISS |
+| VIE | Ukraine | 572 | 548 | MISS |
+| ZRH | Switzerland | 523 | 502 | MISS |
+| OTP | Moldova | 743 | 730 | MISS |
+| FRA | Dubai | 94 | 72 | MISS |
+| VNO | Lithuania | 958 | 907 | MISS |
+| TLV | Israel | 1497 | 1354 | MISS |
+| SIN | Singapore | 1147 | 1130 | MISS |
+
+**Implications**:
+
+- **Pre-warming via cron is mostly useless for game pages.**
+  CF Cron Triggers run from a single PoP. A pre-warm hit only
+  warms that one PoP; nothing else benefits. Don't spend effort
+  on a pre-warmer for `caches.default`-cached routes — it would
+  produce one warm PoP and N–1 still-cold PoPs.
+- **Origin (Python) cost scales with the number of distinct
+  PoPs that see a fresh request, not with viewer count.** For a
+  popular game (CFP final, top-25 matchup), expect ~50–80 PoPs
+  to each pay one cold render — total ≈ 50–80 × 4 s of Python
+  CPU. After that, every viewer in those regions gets ~50 ms
+  hits for the rest of the cache lifetime.
+- **For a US-centric audience** (the realistic case for this
+  fork), 4–6 major PoPs (ATL, DFW, IAD, ORD, LAX, MIA) cover
+  most viewers, so cold-start cost is bounded.
+- **Tests using `@cloudflare/vitest-pool-workers` already
+  documented this** in test/game.test.ts: "Cross-request
+  cache-hit verification happens at production smoke time" —
+  same per-PoP isolation showed up in the test pool.
+
+**If we ever need cross-PoP pooling for game pages**: move the
+caching one layer up — add a Cache Rule in the CF dashboard
+for `sports.unseen-university.org/cfb/game/*` with the same
+TTL semantics. Cache Rules feed the standard CF cache (which
+Tiered Cache pools), and a hit there short-circuits before the
+Worker even runs. Trade-off: per-branch Cache-Control (live
+30 s vs final 1 year vs error no-cache) is harder to express
+in URL-pattern Cache Rules than in Worker code that inspects
+the response. Probably workable by splitting completed-game
+URLs into a path scheme that Cache Rules can match
+(unlikely-to-happen since the URL doesn't carry "completed"),
+or by carefully picking a single conservative TTL. Not worth
+doing today; would matter only if global cold-start ever
+becomes a real complaint.
+
+**Side note**: this also explains why pre-warming via cron is
+the wrong tool for `caches.default` (asked + dismissed earlier
+on 2026-05-04). For KV-backed caches it works fine — those are
+globally replicated. For Cache API content, only Cache Rules
+carry the global benefit.
 
 #### 2E Workers Static Assets binding (2026-05-03)
 
