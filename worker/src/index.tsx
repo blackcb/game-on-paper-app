@@ -627,7 +627,13 @@ app.get("/cfb/game/:gameId", async (c) => {
       fetchAndShapePBP(c.env.PYTHON_BASE_URL, gameId, c.env.WORKER_SHARED_SECRET),
     );
   } catch (err) {
-    console.log(`Python /cfb/process failed for ${gameId}: ${(err as Error).message}`);
+    console.log(
+      JSON.stringify({
+        event: "python_failure",
+        gameId,
+        error: (err as Error).message,
+      }),
+    );
     return c.html(
       <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="pbp" />,
     );
@@ -655,7 +661,14 @@ app.get("/cfb/game/:gameId", async (c) => {
       (await retrievePercentiles(summaryCfg(c), clamped, null)) as Array<Record<string, unknown>>,
     );
   } catch (err) {
-    console.log(`percentiles fetch failed: ${(err as Error).message}`);
+    console.log(
+      JSON.stringify({
+        event: "percentiles_failure",
+        gameId,
+        season: clamped,
+        error: (err as Error).message,
+      }),
+    );
   }
   const html = await time(c, "render", async () =>
     (<GamePage gameData={data as unknown as RenderableGameData} percentiles={percentiles} season={clamped} />).toString(),
@@ -707,13 +720,23 @@ async function scheduled(
   ctx: ExecutionContext,
 ): Promise<void> {
   if (!isFootballSeason()) {
-    console.log("scoreboard cron: off-season, skipping");
+    console.log(JSON.stringify({ event: "cron_skipped", reason: "off_season" }));
     return;
   }
   ctx.waitUntil(
     writeCurrentScoreboard(env.LEAGUE_DATA)
-      .then((count) => console.log(`scoreboard cron: wrote ${count} games to KV`))
-      .catch((err) => console.log(`scoreboard cron failed: ${(err as Error).message}`)),
+      .then((count) =>
+        console.log(JSON.stringify({ event: "cron_run", target: "scoreboard", games: count })),
+      )
+      .catch((err) =>
+        console.log(
+          JSON.stringify({
+            event: "cron_failure",
+            target: "scoreboard",
+            error: (err as Error).message,
+          }),
+        ),
+      ),
   );
 }
 

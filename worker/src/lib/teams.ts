@@ -32,7 +32,14 @@ export async function getTeamInformation(
     const result = await populate("", null, teamId);
     return result ?? null;
   } catch (err) {
-    console.log(`getTeamInformation failed for ${teamId}: ${(err as Error).message}`);
+    console.log(
+      JSON.stringify({
+        event: "espn_team_failure",
+        endpoint: "team_info",
+        teamId,
+        error: (err as Error).message,
+      }),
+    );
     return null;
   }
 }
@@ -50,7 +57,15 @@ export async function getTeamSeasonInformation(
   try {
     result = await populate("", season, teamId);
   } catch (err) {
-    console.log(`getTeamSeasonInformation base fetch failed: ${(err as Error).message}`);
+    console.log(
+      JSON.stringify({
+        event: "espn_team_failure",
+        endpoint: "team_season_base",
+        season,
+        teamId,
+        error: (err as Error).message,
+      }),
+    );
     return null;
   }
 
@@ -58,7 +73,15 @@ export async function getTeamSeasonInformation(
   const typeKeys = new Set(["record", "leaders"]);
   const valPromises = populatableKeys.map((item) =>
     populate(item, season, teamId, typeKeys.has(item) ? "2" : null).catch((err) => {
-      console.log(`team-${item} fetch failed: ${(err as Error).message}`);
+      console.log(
+        JSON.stringify({
+          event: "espn_team_failure",
+          endpoint: `team_${item}`,
+          season,
+          teamId,
+          error: (err as Error).message,
+        }),
+      );
       // Return an empty `items` shape so the spread below doesn't NPE.
       return { items: [] };
     }),
@@ -79,7 +102,16 @@ export async function getTeamSeasonInformation(
       if (!r.ok) throw new Error(`ESPN schedule type ${seasonType} returned ${r.status}`);
       return r.json() as Promise<{ events?: Record<string, ScheduleEvent> }>;
     }).catch((err) => {
-      console.log(`schedule type=${seasonType} failed: ${(err as Error).message}`);
+      console.log(
+        JSON.stringify({
+          event: "espn_team_failure",
+          endpoint: "schedule",
+          season,
+          teamId,
+          season_type: seasonType,
+          error: (err as Error).message,
+        }),
+      );
       return { events: {} as Record<string, ScheduleEvent> };
     });
   });

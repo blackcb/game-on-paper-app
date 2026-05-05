@@ -113,7 +113,13 @@ export async function getCachedCurrentScoreboard(
       expirationTtl: SCOREBOARD_KV_TTL_SECONDS,
     });
   } catch (err) {
-    console.log(`KV write-through failed for ${SCOREBOARD_KV_KEY}: ${(err as Error).message}`);
+    console.log(
+      JSON.stringify({
+        event: "kv_write_failure",
+        key: SCOREBOARD_KV_KEY,
+        error: (err as Error).message,
+      }),
+    );
   }
   return games;
 }

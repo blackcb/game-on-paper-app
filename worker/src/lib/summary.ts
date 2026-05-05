@@ -92,7 +92,14 @@ async function fetchRemoteLeagueData(
     return content;
   } catch (err) {
     console.log(
-      `summary fetch failed for ${year}/${type}, retries remaining: ${retriesRemaining}, err: ${(err as Error).message}`,
+      JSON.stringify({
+        event: "summary_failure",
+        endpoint: "league_data",
+        year,
+        type,
+        retries_remaining: retriesRemaining,
+        error: (err as Error).message,
+      }),
     );
     if (retriesRemaining <= 0 || year - 1 < MIN_SEASON) {
       return [];
@@ -181,7 +188,13 @@ export async function retrievePercentiles(
     return await fetchRemotePercentiles(cfg, year, pctile);
   } catch (err) {
     console.log(
-      `summary /percentiles fetch failed for year=${year}, pctile=${pctile}: ${(err as Error).message}`,
+      JSON.stringify({
+        event: "summary_failure",
+        endpoint: "percentiles",
+        year,
+        pctile,
+        error: (err as Error).message,
+      }),
     );
     return [];
   }
@@ -209,7 +222,15 @@ async function fetchRemoteTeamData(
     return content;
   } catch (err) {
     console.log(
-      `team data fetch failed for year=${year}, teamId=${teamId}, type=${type}, retries=${retriesRemaining}: ${(err as Error).message}`,
+      JSON.stringify({
+        event: "summary_failure",
+        endpoint: "team_data",
+        year,
+        teamId,
+        type,
+        retries_remaining: retriesRemaining,
+        error: (err as Error).message,
+      }),
     );
     if (retriesRemaining <= 0 || year == null || year - 1 < MIN_SEASON) {
       // Express returns `[{ pos_team: team_id }]` on hard failure,
@@ -272,7 +293,13 @@ export async function retrieveLastUpdated(cfg: SummaryConfig): Promise<string | 
   try {
     return await fetchRemoteLastUpdated(cfg);
   } catch (err) {
-    console.log(`summary /updated fetch failed: ${(err as Error).message}`);
+    console.log(
+      JSON.stringify({
+        event: "summary_failure",
+        endpoint: "updated",
+        error: (err as Error).message,
+      }),
+    );
     return null;
   }
 }

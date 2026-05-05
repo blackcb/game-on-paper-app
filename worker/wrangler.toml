@@ -86,6 +86,16 @@ id = "564be97a4ca8419a9ccdc8b0be0f1c3d"
 # Inside Docker on the droplet the legacy frontend keeps using the
 # Docker-internal http://python:7000 — that's not this Worker's
 # concern, that's the Express stack's own config.
+# Workers Logs: persists structured-JSON console.log output to the
+# CF dashboard's Logs tab (Workers & Pages → sports → Logs). Lets
+# operators filter/search by `event` field instead of tailing a
+# stream. 1.0 head_sampling_rate = 100% of invocations are logged
+# — fine at this site's request volume; revisit if billing pressure
+# ever shows up.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [vars]
 PYTHON_BASE_URL = "https://python.unseen-university.org"
 # Sub-phase 2H follow-up (2026-05-03): same pattern as PYTHON_BASE_URL,
