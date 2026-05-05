@@ -1411,15 +1411,33 @@ USER ACTION steps (mirror 2H.5b):
 
 ##### 2H.11 Burn-in + cleanup (24-48h)
 
-- ☐ Monitor Workers Logs for `event: schema_validation_failure`
+- ☑ Monitor Workers Logs for `event: schema_validation_failure`
   lines (none expected) and the `event: request` cadence.
-- ☐ Watch CF Web Analytics for error-rate spikes.
-- ☐ After 48h clean, stop the Express container:
+  **48h burn-in clean**: only operational events seen in
+  `wrangler tail` were the ESPN-503 case (now caught by the
+  scoreboard fallback) and one Python-500 on a pre-2014 game ID
+  (game-error path handled it cleanly). No schema validation
+  failures.
+- ☑ Watch CF Web Analytics for error-rate spikes. **None
+  observed during the 48h window.**
+- ☑ After 48h clean, stop the Express container. **Done
+  2026-05-05** (~48h post-cutover). Service in compose is
+  named `node` (not `frontend` as the plan originally said —
+  fixed the runbook command):
   ```
-  ssh root@<droplet> 'cd /opt/game-on-paper && docker compose stop frontend'
+  ssh deploy@137.184.138.84 'cd /home/deploy && docker compose stop node'
   ```
-  Keep Python + Redis + Caddy. Don't `rm` the frontend container
-  yet — leave it stopped for a week as a paranoid rollback option.
+  Verified post-stop: scoreboard / leaderboard / game route /
+  asset serving all still 200 (Worker handles every request;
+  the Express container was already idle as of the cutover
+  flip — stopping it just makes that explicit). Container
+  intentionally left in `Exited (137)` state, NOT removed —
+  it stays as the rollback target. To roll back: `docker
+  compose start node` (~5 s) + delete the Workers Route in
+  CF dashboard. Other compose containers (`python`, `summary`,
+  `cache`, `redis`) all kept Up — `python` and `summary` are
+  used by the Worker; `cache` and `redis` are unused but
+  cheap to keep running for paranoid rollback.
 - ☐ After 1 week clean, encode the cutover in `wrangler.toml`:
   ```
   [[routes]]
@@ -1428,8 +1446,13 @@ USER ACTION steps (mirror 2H.5b):
   ```
   This locks the route into the wrangler config so future
   `wrangler deploy` invocations confirm it's still there.
+  **Eligible 2026-05-12.**
 - ☐ Optionally update `.github/workflows/fork-deploy.yml` to
-  stop deploying the frontend container.
+  stop deploying the `node` container. Could change the build
+  matrix to skip `name: node` and remove the SCP'd compose
+  file's `node` service. Cosmetic — pulling and starting an
+  idle stopped container is cheap. Skip until/unless it
+  bothers anyone.
 
 ##### 2H rollback runbook
 
