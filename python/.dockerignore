@@ -1,0 +1,22 @@
+# Local dev/test artifacts that shouldn't ship in the image.
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Test code is not used at runtime; integration tests hit real APIs
+# and would inflate the image and slow `docker build` cache misses.
+tests/
+
+# Tooling that builds fixtures or schemas — used out-of-band.
+scripts/
+
+# Documentation does not run.
+README.md
+
+# requirements-dev.txt is intentionally NOT excluded — present in
+# the build context so future Dockerfile stages can install dev
+# tooling if needed, but the current Dockerfile does not pull it in.

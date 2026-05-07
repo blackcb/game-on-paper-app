@@ -13,7 +13,14 @@ gunicorn>=23,<24
 # Pinned tightly because EP/WP/QBR model output is sensitive to xgboost
 # minor versions; snapshot tests in python/tests/test_process_snapshot.py
 # would diff if this drifts. Bump in lockstep with regenerated fixtures.
-xgboost~=2.1.4
+#
+# `xgboost-cpu` is the CPU-only build of the same wheel. The default
+# `xgboost` package ships GPU code paths and pulls in ~700 MB of
+# CUDA/cuDNN/NCCL via nvidia-* dependencies — useless on Cloudflare
+# Containers (no GPU) and bloated the image past 1.3 GB. The CPU-only
+# build produces identical predictions on the same model files; the
+# snapshot tests verify parity.
+xgboost-cpu~=2.1.4
 numpy>=2.0.2
 sportsdataverse==0.0.36.3.3
 # Schema validation for /cfb/process responses (perf-plan Day 4).
