@@ -1,0 +1,8 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"38","Colorado","fbs","Pac-12",2020,4040880,"Sam Noyer",37,5,5,7.4,8.03105645288642,0.217055579807741,1.60621129057728,211,5.7027027027027,42.2,0.567567567567568,4,1,97,76,44,17.5,229.5,84,204.5,"P5"
+"38","Colorado","fbs","Pac-12",2020,4243162,"Tyler Lytle",1,1,5,1,2.06342234405241,2.06342234405241,2.06342234405241,15,15,15,1,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"38","Colorado","fbs","Pac-12",2020,4360649,"Dimitri Stanley",1,1,5,1,-0.648913555731576,-0.648913555731576,-0.648913555731576,-1,-1,-1,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"38","Colorado","fbs","Pac-12",2020,4360654,"Jarek Broussard",128,5,5,25.6,10.1134822126919,0.0790115797866552,2.02269644253837,810,6.328125,162,0.40625,3,1,84,55,112,162,16,50,2,"P5"
+"38","Colorado","fbs","Pac-12",2020,4427034,"Joe Davis",16,4,5,4,-5.54912839518172,-0.346820524698858,-1.38728209879543,29,1.8125,7.25,0.1875,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"38","Colorado","fbs","Pac-12",2020,4430067,"Jaren Mangham",22,4,5,5.5,-11.3075772771215,-0.513980785323704,-2.82689431928037,33,1.5,8.25,0.227272727272727,1,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"38","Colorado","fbs","Pac-12",2020,4686769,"Ashaad Clayton",7,3,5,2.33333333333333,2.97783474322389,0.425404963317699,0.992611581074631,31,4.42857142857143,10.3333333333333,0.571428571428571,2,0,NA,NA,NA,NA,NA,NA,NA,"P5"

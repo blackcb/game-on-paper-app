@@ -1,0 +1,7 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"265","Washington State","fbs","Pac-12",2020,4046677,"Deon McIntosh",44,3,3,14.6666666666667,8.78066242737425,0.199560509713051,2.92688747579142,304,6.90909090909091,101.333333333333,0.522727272727273,2,0,90,37,49,32,184.5,33,27,"P5"
+"265","Washington State","fbs","Pac-12",2020,4245146,"Travell Harris",5,3,3,1.66666666666667,7.18346174148018,1.43669234829604,2.39448724716006,61,12.2,20.3333333333333,0.8,2,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2020,4245161,"Clay Markoff",4,1,3,4,-0.851980535001,-0.21299513375025,-0.851980535001,12,3,12,0.25,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2020,4361141,"Cammon Cooper",2,1,3,2,-0.40367434460803,-0.201837172304015,-0.40367434460803,3,1.5,3,0.5,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2020,4426645,"Jouvensly Bazil",1,1,3,1,-0.961580451208658,-0.961580451208658,-0.961580451208658,-6,-6,-6,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2020,4426999,"Gunner Cruz",1,1,3,1,2.9332757181813,2.9332757181813,2.9332757181813,4,4,4,1,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"

@@ -1,0 +1,7 @@
+"team_id","pos_team","division","conference","season","player_id","receiver_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","comp","targets","catchpct","passing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","catchpct_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"265","Washington State","fbs","Pac-12",2020,4046677,"Deon McIntosh",1,1,1,1,-0.893695517838753,-0.893695517838753,-0.893695517838753,1,1,1,0,1,1,1,0,0,NA,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2020,4055165,"Renard Bell",2,1,1,2,4.17152041426122,2.08576020713061,4.17152041426122,12,6,12,0.5,2,2,1,1,0,462,94,1,353.5,2.5,620,506.5,603,"P5"
+"265","Washington State","fbs","Pac-12",2020,4245146,"Travell Harris",2,1,1,2,-0.278330633154635,-0.139165316577317,-0.278330633154635,15,7.5,15,0.5,2,2,1,0,0,540,558,577,353.5,2.5,619,374.5,584,"P5"
+"265","Washington State","fbs","Pac-12",2020,4245147,"Jamire Calvin",2,1,1,2,1.28030607851993,0.640153039259963,1.28030607851993,9,4.5,9,0.5,1,2,0.5,0,0,516,393,162,353.5,592,621,580,616,"P5"
+"265","Washington State","fbs","Pac-12",2020,4245161,"Clay Markoff",1,1,1,1,-0.628546226478567,-0.628546226478567,-0.628546226478567,7,7,7,0,1,1,1,0,0,NA,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2020,4379476,"Lucas Bacon",1,1,1,1,1.62748527954341,1.62748527954341,1.62748527954341,12,12,12,1,1,1,1,0,0,NA,NA,NA,NA,NA,NA,NA,NA,"P5"

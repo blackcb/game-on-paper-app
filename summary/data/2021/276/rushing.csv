@@ -1,0 +1,7 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"276","Marshall","fbs","Conference USA",2021,4370345,"Sheldon Evans",39,6,7,6.5,-6.54344778707941,-0.167780712489216,-1.0905746311799,173,4.43589743589744,28.8333333333333,0.358974358974359,4,2,NA,NA,NA,NA,NA,NA,NA,"G5"
+"276","Marshall","fbs","Conference USA",2021,4374334,"Luke Zban",8,2,7,4,0.787085307116323,0.0983856633895403,0.393542653558161,39,4.875,19.5,0.5,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"276","Marshall","fbs","Conference USA",2021,4430126,"Knowledge McDaniel",5,2,7,2.5,0.222028334762449,0.0444056669524899,0.111014167381225,39,7.8,19.5,0.6,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"276","Marshall","fbs","Conference USA",2021,4430686,"Grant Wells",26,7,7,3.71428571428571,9.71531601542169,0.373666000593142,1.38790228791738,115,4.42307692307692,16.4285714285714,0.576923076923077,5,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"276","Marshall","fbs","Conference USA",2021,4690013,"Rasheen Ali",117,6,7,19.5,39.8246191810647,0.340381360521921,6.63743653017745,758,6.47863247863248,126.333333333333,0.504273504273504,16,4,17,4,19,34,61,32,7,"G5"
+"276","Marshall","fbs","Conference USA",2021,4709672,"Ethan Payne",8,2,7,4,-3.63955479514254,-0.454944349392817,-1.81977739757127,31,3.875,15.5,0.125,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"

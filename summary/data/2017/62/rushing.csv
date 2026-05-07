@@ -1,0 +1,7 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"62","Hawai'i","fbs","Mountain West",2017,547121,"Ryan Tuiasoa",30,9,11,3.33333333333333,23.619392196103,0.787313073203432,2.62437691067811,217,7.23333333333333,24.1111111111111,0.733333333333333,3,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"62","Hawai'i","fbs","Mountain West",2017,547172,"Diocemy Saint Juste",256,11,11,23.2727272727273,-10.6734045225533,-0.0416929864162239,-0.970309502050303,1292,5.046875,117.454545454545,0.421875,6,2,201,201,170,107,18,142,17,"G5"
+"62","Hawai'i","fbs","Mountain West",2017,4038220,"Cole McDonald",16,4,11,4,12.230234249692,0.764389640605749,3.057558562423,138,8.625,34.5,0.5,1,1,NA,NA,NA,NA,NA,NA,NA,"G5"
+"62","Hawai'i","fbs","Mountain West",2017,4038224,"Dru Brown",28,10,11,2.8,2.8802372445895,0.102865615878197,0.28802372445895,188,6.71428571428571,18.8,0.535714285714286,2,2,NA,NA,NA,NA,NA,NA,NA,"G5"
+"62","Hawai'i","fbs","Mountain West",2017,4038226,"Freddie Holly III",7,1,11,7,-2.76962511237026,-0.395660730338609,-2.76962511237026,19,2.71428571428571,19,0.428571428571429,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"62","Hawai'i","fbs","Mountain West",2017,4053631,"Stan Gaudion",1,1,11,1,-0.782855349296221,-0.782855349296221,-0.782855349296221,19,19,19,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"

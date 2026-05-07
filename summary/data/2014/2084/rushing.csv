@@ -1,0 +1,8 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"2084","Buffalo","fbs","Mid-American",2014,513613,"Anthone Taylor",224,9,9,24.8888888888889,-10.6960553985523,-0.0477502473149657,-1.18845059983915,1172,5.23214285714286,130.222222222222,0.419642857142857,10,3,202,206,171,117,28,120,13,"G5"
+"2084","Buffalo","fbs","Mid-American",2014,513614,"Joe Licata",15,8,9,1.875,4.65360553910008,0.310240369273339,0.58170069238751,77,5.13333333333333,9.625,0.466666666666667,1,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"2084","Buffalo","fbs","Mid-American",2014,513615,"Tony Daniel",6,3,9,2,6.06659620832907,1.01109936805484,2.02219873610969,45,7.5,15,0.666666666666667,1,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"2084","Buffalo","fbs","Mid-American",2014,531953,"Jordan Johnson",56,6,9,9.33333333333333,1.92324098239459,0.0343435889713319,0.320540163732431,282,5.03571428571429,47,0.446428571428571,1,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"2084","Buffalo","fbs","Mid-American",2014,531958,"Devin Campbell",27,5,9,5.4,-7.61243650474978,-0.28194209276851,-1.52248730094996,124,4.59259259259259,24.8,0.296296296296296,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"2084","Buffalo","fbs","Mid-American",2014,550993,"Jacob Martinez",2,2,9,1,-2.12494222128604,-1.06247111064302,-1.06247111064302,1,0.5,0.5,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"2084","Buffalo","fbs","Mid-American",2014,3125774,"Zach Nicholas",1,1,9,1,-0.220460708745529,-0.220460708745529,-0.220460708745529,4,4,4,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"

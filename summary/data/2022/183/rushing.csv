@@ -1,0 +1,6 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"183","Syracuse","fbs","ACC",2022,4426966,"Garrett Shrader",104,10,11,10.4,25.5046502701084,0.245237021827966,2.55046502701084,519,4.99038461538461,51.9,0.480769230769231,6,0,38,38,29,52,135.5,126,142.5,"P5"
+"183","Syracuse","fbs","ACC",2022,4430871,"Sean Tucker",180,11,11,16.3636363636364,-12.0341966445887,-0.0668566480254928,-1.09401787678079,784,4.35555555555556,71.2727272727273,0.394444444444444,8,1,224,216,198,162,51,190,59,"P5"
+"183","Syracuse","fbs","ACC",2022,4432691,"Carlos Del Rio-Wilson",12,3,11,4,-4.83526976047171,-0.402939146705976,-1.6117565868239,63,5.25,21,0.5,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"183","Syracuse","fbs","ACC",2022,4565172,"Courtney Jackson",2,2,11,1,-3.17640045086777,-1.58820022543389,-1.58820022543389,-2,-1,-1,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"183","Syracuse","fbs","ACC",2022,4911851,"LeQuint Allen",19,7,11,2.71428571428571,-7.07131886726956,-0.372174677224714,-1.01018840960994,72,3.78947368421053,10.2857142857143,0.157894736842105,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"

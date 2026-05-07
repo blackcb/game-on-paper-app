@@ -1,0 +1,8 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"189","Bowling Green","fbs","Mid-American",2015,513596,"Ryan Burbrink",1,1,13,1,1.86764774511695,1.86764774511695,1.86764774511695,7,7,7,1,1,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"189","Bowling Green","fbs","Mid-American",2015,531801,"James Knapke",2,2,13,1,-1.79880613747286,-0.899403068736431,-0.899403068736431,4,2,2,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"189","Bowling Green","fbs","Mid-American",2015,536143,"Gehrig Dieter",1,1,13,1,-1.14881919288381,-1.14881919288381,-1.14881919288381,-2,-2,-2,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"189","Bowling Green","fbs","Mid-American",2015,545228,"Donovan Wilson",36,9,13,4,-1.39494750431882,-0.038748541786634,-0.154994167146536,78,2.16666666666667,8.66666666666667,0.388888888888889,7,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"189","Bowling Green","fbs","Mid-American",2015,547066,"Ronnie Moore",8,7,13,1.14285714285714,-0.675171687703753,-0.0843964609629691,-0.0964530982433933,49,6.125,7,0.375,1,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"189","Bowling Green","fbs","Mid-American",2015,547077,"Fred Coppet",134,13,13,10.3076923076923,13.7568834263355,0.102663309151757,1.0582218020258,771,5.75373134328358,59.3076923076923,0.440298507462687,5,0,67,88,77,99,80.5,85,134,"G5"
+"189","Bowling Green","fbs","Mid-American",2015,3914399,"Matt Domer",8,3,13,2.66666666666667,2.4406347417875,0.305079342723438,0.813544913929167,117,14.625,39,0.25,1,0,NA,NA,NA,NA,NA,NA,NA,"G5"

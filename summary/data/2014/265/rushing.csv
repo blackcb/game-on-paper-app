@@ -1,0 +1,8 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"265","Washington State","fbs","Pac-12",2014,504823,"Connor Halliday",9,5,11,1.8,-6.17981921858938,-0.686646579843265,-1.23596384371788,25,2.77777777777778,5,0.333333333333333,0,1,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2014,513098,"Marcus Mason",5,2,11,2.5,-2.71965963993055,-0.54393192798611,-1.35982981996528,7,1.4,3.5,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2014,534897,"Theron West",21,8,11,2.625,-1.39735131804462,-0.0665405389545055,-0.174668914755577,88,4.19047619047619,11,0.333333333333333,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2014,550629,"Luke Falk",19,4,11,4.75,-8.07209596234336,-0.424847155912808,-2.01802399058584,35,1.84210526315789,8.75,0.473684210526316,1,2,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2014,550637,"Jamal Morrow",76,11,11,6.90909090909091,-11.8920889501166,-0.156474854606798,-1.08109899546515,301,3.96052631578947,27.3636363636364,0.368421052631579,0,0,211,201,237,201,251.5,232,261,"P5"
+"265","Washington State","fbs","Pac-12",2014,550647,"Gerard Wicks",50,8,11,6.25,2.88559097682979,0.0577118195365959,0.360698872103724,184,3.68,23,0.48,3,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2014,3134413,"Jordan Dascalo",1,1,11,1,-2.28403958065791,-2.28403958065791,-2.28403958065791,3,3,3,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"

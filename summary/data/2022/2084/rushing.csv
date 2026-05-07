@@ -1,0 +1,8 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"2084","Buffalo","fbs","Mid-American",2022,4244833,"Quian Williams",1,1,10,1,-2.08910521438636,-2.08910521438636,-2.08910521438636,-2,-2,-2,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"2084","Buffalo","fbs","Mid-American",2022,4367706,"Robbie Mangas",1,1,10,1,2.83528654405782,2.83528654405782,2.83528654405782,5,5,5,1,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"2084","Buffalo","fbs","Mid-American",2022,4429454,"Ron Cook Jr.",121,9,10,13.4444444444444,0.586109831252215,0.00484388290291087,0.0651233145835795,453,3.74380165289256,50.3333333333333,0.371900826446281,4,1,149,149,150,184,170,232,152,"G5"
+"2084","Buffalo","fbs","Mid-American",2022,4570057,"Cole Snyder",64,10,10,6.4,8.48555730015983,0.132586832814997,0.848555730015984,231,3.609375,23.1,0.4375,4,4,103,104,66,97,260,241,261,"G5"
+"2084","Buffalo","fbs","Mid-American",2022,4599158,"Al-Jay Henderson",43,8,10,5.375,-0.585123294618541,-0.013607518479501,-0.0731404118273176,248,5.76744186046512,31,0.255813953488372,3,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"2084","Buffalo","fbs","Mid-American",2022,4684091,"Jamari Gassett",1,1,10,1,-0.743634124950547,-0.743634124950547,-0.743634124950547,1,1,1,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"2084","Buffalo","fbs","Mid-American",2022,4686658,"Mike Washington",110,10,10,11,-1.46879164941049,-0.0133526513582771,-0.146879164941049,433,3.93636363636364,43.3,0.4,6,0,160,161,160,148.5,178,221,187,"G5"

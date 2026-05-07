@@ -1,0 +1,7 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"265","Washington State","fbs","Pac-12",2018,3127269,"Keith Harrington",12,5,11,2.4,-6.88783281823359,-0.573986068186133,-1.37756656364672,34,2.83333333333333,6.8,0.166666666666667,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2018,3884368,"James Williams",113,11,11,10.2727272727273,20.7314836372971,0.183464456967231,1.88468033066337,533,4.71681415929203,48.4545454545455,0.460176991150442,9,1,48,54,41,72,161,179,184,"P5"
+"265","Washington State","fbs","Pac-12",2018,4038524,"Gardner Minshew",40,10,11,4,8.54416036780752,0.213604009195188,0.854416036780753,170,4.25,17,0.45,3,1,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2018,4245146,"Travell Harris",1,1,11,1,-0.345143075905951,-0.345143075905951,-0.345143075905951,3,3,3,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2018,4245161,"Clay Markoff",1,1,11,1,-1.77765275650596,-1.77765275650596,-1.77765275650596,3,3,3,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"265","Washington State","fbs","Pac-12",2018,4361142,"Max Borghi",63,10,11,6.3,13.7934911411559,0.218944303827871,1.37934911411559,338,5.36507936507936,33.8,0.444444444444444,6,1,NA,NA,NA,NA,NA,NA,NA,"P5"

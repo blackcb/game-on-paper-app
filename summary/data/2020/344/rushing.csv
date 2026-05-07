@@ -1,0 +1,7 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"344","Mississippi State","fbs","SEC",2020,4044431,"K.J. Costello",10,4,9,2.5,-5.36900580058289,-0.536900580058289,-1.34225145014572,37,3.7,9.25,0.2,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"344","Mississippi State","fbs","SEC",2020,4259805,"Kylin Hill",15,3,9,5,-3.44183887153123,-0.229455924768748,-1.14727962384374,58,3.86666666666667,19.3333333333333,0.333333333333333,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"344","Mississippi State","fbs","SEC",2020,4428915,"Lee Witherspoon",1,1,9,1,-0.518629964711739,-0.518629964711739,-0.518629964711739,0,0,0,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"344","Mississippi State","fbs","SEC",2020,4429059,"Jo'Quavious Marks",2,1,9,2,0.217063337956336,0.108531668978168,0.217063337956336,13,6.5,13,0.5,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"344","Mississippi State","fbs","SEC",2020,4566196,"Will Rogers",7,3,9,2.33333333333333,7.67122542693162,1.09588934670452,2.55707514231054,63,9,21,0.857142857142857,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"344","Mississippi State","fbs","SEC",2020,4689338,"Dillon Johnson",33,7,9,4.71428571428571,13.7632172111322,0.417067188216127,1.9661738873046,121,3.66666666666667,17.2857142857143,0.484848484848485,4,0,NA,NA,NA,NA,NA,NA,NA,"P5"

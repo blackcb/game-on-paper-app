@@ -1,0 +1,6 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"164","Rutgers","fbs","Big Ten",2023,4574732,"Aaron Young",7,5,11,1.4,-4.23779468852543,-0.605399241217919,-0.847558937705087,33,4.71428571428571,6.6,0.285714285714286,0,1,NA,NA,NA,NA,NA,NA,NA,"P5"
+"164","Rutgers","fbs","Big Ten",2023,4608686,"Kyle Monangai",196,11,11,17.8181818181818,18.2411384362989,0.0930670328382595,1.65828531239081,1018,5.19387755102041,92.5454545454545,0.428571428571429,6,0,59,68,95,103,25,129,29,"P5"
+"164","Rutgers","fbs","Big Ten",2023,4682653,"Al-Shadee Salaam",5,1,11,5,1.85142038305259,0.370284076610518,1.85142038305259,27,5.4,27,0.4,1,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"164","Rutgers","fbs","Big Ten",2023,4893657,"Gavin Wimsatt",102,11,11,9.27272727272727,10.3812790784573,0.101777245867229,0.943752643496122,552,5.41176470588235,50.1818181818182,0.5,7,2,101,104,88,32.5,128,102,159,"P5"
+"164","Rutgers","fbs","Big Ten",2023,5099736,"Ja'shon Benjamin",38,6,11,6.33333333333333,-8.19426774952225,-0.215638624987428,-1.36571129158704,123,3.23684210526316,20.5,0.210526315789474,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"

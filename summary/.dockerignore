@@ -1,0 +1,6 @@
+# Build context excludes — keep image small and deterministic.
+**/node_modules/
+**/.cache/
+**/build/
+**/*.log
+README.md

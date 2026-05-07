@@ -1,0 +1,6 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"166","New Mexico State","fbs","Sun Belt",2017,3124971,"Nick Jeanty",8,2,12,4,3.99024781285267,0.498780976606583,1.99512390642633,66,8.25,33,0.75,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"166","New Mexico State","fbs","Sun Belt",2017,3124979,"Larry Rose III",170,11,12,15.4545454545455,-10.4466073722892,-0.0614506316017009,-0.949691579299015,792,4.65882352941177,72,0.335294117647059,9,0,199,199,181,224,72,174,87,"G5"
+"166","New Mexico State","fbs","Sun Belt",2017,3124981,"Tyler Rogers",42,11,12,3.81818181818182,10.8015060235226,0.257178714845776,0.981955093047507,183,4.35714285714286,16.6363636363636,0.595238095238095,7,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"166","New Mexico State","fbs","Sun Belt",2017,3922124,"Christian Gibson",3,2,12,1.5,-1.8413544142094,-0.613784804736467,-0.9206772071047,5,1.66666666666667,2.5,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"166","New Mexico State","fbs","Sun Belt",2017,4040790,"Jason Huntley",64,10,12,6.4,11.0217296774874,0.172214526210741,1.10217296774874,434,6.78125,43.4,0.46875,1,0,NA,NA,NA,NA,NA,NA,NA,"G5"

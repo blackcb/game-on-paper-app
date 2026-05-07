@@ -1,0 +1,8 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"295","Old Dominion","fbs","Conference USA",2014,513949,"Taylor Heinicke",44,10,10,4.4,34.473400683876,0.783486379179,3.4473400683876,344,7.81818181818182,34.4,0.636363636363636,2,2,NA,NA,NA,NA,NA,NA,NA,"G5"
+"295","Old Dominion","fbs","Conference USA",2014,513961,"Antonio Vaughan",5,4,10,1.25,-5.87509542506223,-1.17501908501245,-1.46877385626556,27,5.4,6.75,0.2,0,1,NA,NA,NA,NA,NA,NA,NA,"G5"
+"295","Old Dominion","fbs","Conference USA",2014,535113,"David Washington",1,1,10,1,-0.931782024269488,-0.931782024269488,-0.931782024269488,0,0,0,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"295","Old Dominion","fbs","Conference USA",2014,553047,"Cam Boyd",16,5,10,3.2,0.769352490419846,0.0480845306512404,0.153870498083969,87,5.4375,17.4,0.5,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"295","Old Dominion","fbs","Conference USA",2014,553060,"Gerard Johnson",73,9,10,8.11111111111111,-4.51969830325854,-0.0619136753871033,-0.50218870036206,349,4.78082191780822,38.7777777777778,0.342465753424658,0,0,167,172,180,229,234,168,225,"G5"
+"295","Old Dominion","fbs","Conference USA",2014,3123205,"Vincent Lowe",2,2,10,1,-1.703784562255,-0.851892281127502,-0.851892281127502,-1,-0.5,-0.5,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"295","Old Dominion","fbs","Conference USA",2014,3123212,"Ray Lawry",123,9,10,13.6666666666667,37.6851322226056,0.306383188801671,4.18723691362284,911,7.40650406504065,101.222222222222,0.471544715447154,15,1,19,13,13,55,49,18,37,"G5"

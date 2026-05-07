@@ -1,0 +1,8 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"24","Stanford","fbs","Pac-12",2020,4239964,"Isaiah Sanders",1,1,5,1,2.00758720693091,2.00758720693091,2.00758720693091,5,5,5,1,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"24","Stanford","fbs","Pac-12",2020,4242546,"Davis Mills",13,4,5,3.25,1.01084506148217,0.0777573124217056,0.252711265370543,70,5.38461538461539,17.5,0.615384615384615,2,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"24","Stanford","fbs","Pac-12",2020,4360738,"Jack West",1,1,5,1,0.183684647350973,0.183684647350973,0.183684647350973,1,1,1,1,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"24","Stanford","fbs","Pac-12",2020,4360739,"Simi Fehoko",1,1,5,1,-0.505209016345157,-0.505209016345157,-0.505209016345157,-1,-1,-1,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"24","Stanford","fbs","Pac-12",2020,4360743,"Justus Woods",4,2,5,2,-2.40025753396544,-0.600064383491359,-1.20012876698272,8,2,4,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"24","Stanford","fbs","Pac-12",2020,4428211,"Nathaniel Peat",26,5,5,5.2,5.04440369993615,0.194015526920621,1.00888073998723,181,6.96153846153846,36.2,0.5,1,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"24","Stanford","fbs","Pac-12",2020,4569330,"Austin Jones",99,5,5,19.8,-6.53104145137618,-0.0659701156704665,-1.30620829027524,449,4.53535353535354,89.8,0.434343434343434,7,1,194,204,187,123,110,184,42,"P5"

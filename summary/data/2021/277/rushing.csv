@@ -1,0 +1,8 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"277","West Virginia","fbs","Big 12",2021,4244029,"Jarret Doege",28,10,11,2.8,-1.24553979263876,-0.044483564022813,-0.124553979263876,98,3.5,9.8,0.392857142857143,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"277","West Virginia","fbs","Big 12",2021,4362196,"Leddie Brown",207,11,11,18.8181818181818,15.5455072720058,0.0750990689468879,1.41322793381871,1063,5.13526570048309,96.6363636363636,0.439613526570048,12,4,73,77,100,93,25,111,35,"P5"
+"277","West Virginia","fbs","Big 12",2021,4362208,"Sam James",1,1,11,1,1.6163913897206,1.6163913897206,1.6163913897206,9,9,9,1,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"277","West Virginia","fbs","Big 12",2021,4427916,"Tony Mathis Jr.",52,7,11,7.42857142857143,-5.44937562136148,-0.104795685026182,-0.778482231623068,259,4.98076923076923,37,0.423076923076923,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"277","West Virginia","fbs","Big 12",2021,4429847,"Garrett Greene",32,8,11,4,15.5288676252028,0.485277113287586,1.94110845315035,257,8.03125,32.125,0.5625,2,1,NA,NA,NA,NA,NA,NA,NA,"P5"
+"277","West Virginia","fbs","Big 12",2021,4569452,"Winston Wright Jr.",2,2,11,1,-1.30938774523351,-0.654693872616755,-0.654693872616755,2,1,1,0,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"277","West Virginia","fbs","Big 12",2021,4569663,"Justin Johnson Jr.",9,2,11,4.5,-2.64281937913021,-0.293646597681134,-1.3214096895651,23,2.55555555555556,11.5,0.333333333333333,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"

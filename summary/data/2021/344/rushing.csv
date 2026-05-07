@@ -1,0 +1,6 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"344","Mississippi State","fbs","SEC",2021,4429059,"Jo'quavious Marks",79,11,11,7.18181818181818,0.337565926571633,0.00427298641229916,0.0306878115065121,273,3.45569620253165,24.8181818181818,0.430379746835443,5,0,145,146,145,102,233.5,227,240,"P5"
+"344","Mississippi State","fbs","SEC",2021,4566196,"Will Rogers",24,10,11,2.4,-1.02820660533024,-0.0428419418887602,-0.102820660533024,102,4.25,10.2,0.375,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"344","Mississippi State","fbs","SEC",2021,4685975,"Chance Lovertich",1,1,11,1,0.6420682144827,0.6420682144827,0.6420682144827,7,7,7,1,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"344","Mississippi State","fbs","SEC",2021,4689338,"Dillon Johnson",70,11,11,6.36363636363636,13.5341567006829,0.193345095724041,1.23037788188026,349,4.98571428571429,31.7272727272727,0.485714285714286,3,0,80,86,48,47,211.5,125,226,"P5"
+"344","Mississippi State","fbs","SEC",2021,4689340,"J.J. Jernighan",4,2,11,2,-0.539369299570767,-0.134842324892692,-0.269684649785383,14,3.5,7,0.25,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"

@@ -1,0 +1,6 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"344","Mississippi State","fbs","SEC",2022,102597,"Will Rogers",14,8,11,1.75,-13.1342217385457,-0.938158695610406,-1.64177771731821,40,2.85714285714286,5,0.357142857142857,0,3,NA,NA,NA,NA,NA,NA,NA,"P5"
+"344","Mississippi State","fbs","SEC",2022,4429059,"Jo'quavious Marks",97,10,11,9.7,13.4576435015931,0.138738592799928,1.34576435015931,468,4.82474226804124,46.8,0.474226804123711,7,0,77,77,64,61,163,146,171,"P5"
+"344","Mississippi State","fbs","SEC",2022,4684421,"Simeon Price",23,8,11,2.875,-5.46446418262782,-0.237585399244688,-0.683058022828477,82,3.56521739130435,10.25,0.260869565217391,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"
+"344","Mississippi State","fbs","SEC",2022,4689338,"Dillon Johnson",89,10,11,8.9,1.07181227482438,0.0120428345485885,0.107181227482438,496,5.57303370786517,49.6,0.404494382022472,3,0,146,147,147,144,147,79,159,"P5"
+"344","Mississippi State","fbs","SEC",2022,4689340,"J.J. Jernighan",4,2,11,2,-1.51868852675882,-0.379672131689705,-0.759344263379411,19,4.75,9.5,0.5,0,0,NA,NA,NA,NA,NA,NA,NA,"P5"

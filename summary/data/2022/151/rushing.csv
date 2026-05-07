@@ -1,0 +1,8 @@
+"team_id","pos_team","division","conference","season","player_id","rusher_player_name","plays","games","team_games","playsgame","TEPA","EPAplay","EPAgame","yards","yardsplay","yardsgame","success","rushing_td","fumbles","TEPA_rank","EPAgame_rank","EPAplay_rank","success_rank","yards_rank","yardsplay_rank","yardsgame_rank","fbs_class"
+"151","East Carolina","fbs","American Athletic",2022,4241387,"Ryan Jones",1,1,11,1,0.847675746367698,0.847675746367698,0.847675746367698,6,6,6,1,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"151","East Carolina","fbs","American Athletic",2022,4360131,"Holton Ahlers",46,11,11,4.18181818181818,19.4452617690698,0.422723081936301,1.76775106991544,167,3.6304347826087,15.1818181818182,0.5,4,1,NA,NA,NA,NA,NA,NA,NA,"G5"
+"151","East Carolina","fbs","American Athletic",2022,4432138,"Mason Garcia",2,1,11,2,0.304492560667224,0.152246280333612,0.304492560667224,9,4.5,9,0.5,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"151","East Carolina","fbs","American Athletic",2022,4567470,"Jsi Hatfield",1,1,11,1,-2.22831013255676,-2.22831013255676,-2.22831013255676,-9,-9,-9,0,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"151","East Carolina","fbs","American Athletic",2022,4590347,"Rahjai Harris",50,4,11,12.5,-8.14324667638495,-0.162864933527699,-2.03581166909624,79,1.58,19.75,0.26,3,0,NA,NA,NA,NA,NA,NA,NA,"G5"
+"151","East Carolina","fbs","American Athletic",2022,4596334,"Keaton Mitchell",160,10,11,16,19.7411029344553,0.123381893340346,1.97411029344553,1120,7,112,0.46875,10,0,56,53,70,68.5,17,14.5,14,"G5"
+"151","East Carolina","fbs","American Athletic",2022,4794107,"Marlon Gunn Jr.",59,7,11,8.42857142857143,-5.92599864682721,-0.10044065503097,-0.84657123526103,197,3.33898305084746,28.1428571428571,0.372881355932203,0,0,NA,NA,NA,NA,NA,NA,NA,"G5"
