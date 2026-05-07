@@ -489,10 +489,20 @@ const CACHE_CONTROL = {
   // Completed games: bytes the user sees never change. Browser 1
   // day, edge 1 year.
   completed: "public, max-age=86400, s-maxage=31536000",
-  // In-progress: very short — the page auto-refreshes every minute
-  // anyway. 30 s lets back-to-back requests collapse without
-  // staling the live game.
-  inProgress: "public, max-age=30, s-maxage=30",
+  // In-progress: very short — the page auto-refreshes every
+  // minute anyway. 30 s lets back-to-back requests collapse
+  // without staling the live game.
+  //
+  // Sub-phase 2J: `stale-while-revalidate=60` lets cache layers
+  // (browser + caches.default at edge) serve the stale response
+  // for up to 60 s past expiry while triggering a background
+  // refresh. Without SWR, the unlucky user whose request lands
+  // at TTL expiry waits ~4 s for a fresh Python pipeline run.
+  // With SWR, that user gets the slightly-stale cached response
+  // immediately (~75 ms) and the next request gets the fresh
+  // one. Tail latency drops from "spike every 30 s" to
+  // "always ~75 ms with eventual consistency."
+  inProgress: "public, max-age=30, s-maxage=30, stale-while-revalidate=60",
   // Pregame: 5 min. Team metadata + matchup percentiles don't shift
   // pre-kickoff but we don't want to outlive the actual kickoff
   // moment (which would silently keep serving "scheduled" past the

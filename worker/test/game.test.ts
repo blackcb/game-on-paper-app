@@ -283,7 +283,7 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     );
   });
 
-  it("in-progress games set 30s Cache-Control", async () => {
+  it("in-progress games set 30s Cache-Control with 60s stale-while-revalidate (2J)", async () => {
     const id = uniqueGameId();
     const inProgressGameInfo = sampleGameInfo({
       status: { type: { name: "STATUS_IN_PROGRESS", completed: false, detail: "Q3 5:21" } },
@@ -296,7 +296,13 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     });
     mockEspnThenPython(inProgressGameInfo, inProgressPython);
     const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
-    expect(res.headers.get("cache-control")).toBe("public, max-age=30, s-maxage=30");
+    // Sub-phase 2J: SWR=60 lets the cache serve stale up to 60 s
+    // past expiry while triggering a background refresh. The
+    // unlucky user whose request lands at TTL expiry no longer
+    // waits 4 s for the Python pipeline.
+    expect(res.headers.get("cache-control")).toBe(
+      "public, max-age=30, s-maxage=30, stale-while-revalidate=60",
+    );
   });
 
   it("?json=1 returns JSON with the same Cache-Control as the HTML variant", async () => {

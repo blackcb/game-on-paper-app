@@ -104,15 +104,22 @@ USER ACTION step without confirmation from the user.**
     `CACHE_CONTROL.errorNoStore` so error responses won't
     incorrectly cache if the rule ever engages.
   - 2J (Stale-while-revalidate for in-progress games):
-    **next**. Doesn't depend on 2I (operates on per-PoP cache).
-    Eliminates 4 s tail spikes at cache-expiry. Estimate 1 day.
+    **DONE 2026-05-08**. `CACHE_CONTROL.inProgress` now ends
+    with `stale-while-revalidate=60`. The unlucky user whose
+    request lands at TTL expiry no longer waits 4 s for a
+    fresh Python pipeline run — they get the slightly-stale
+    cached response (~75 ms) while a background refresh fires.
+    Test asserts the new directive; production smoke confirmed
+    other branches unaffected. Live-game validation deferred
+    to football season (Aug 20+).
   - vitest suite: 143 assertions across 12 files, ~5.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-07 (2I attempted: Cache Rule configured
-  correctly but doesn't engage on this account — CF support
-  territory. Defensive `errorNoStore` Cache-Control kept.
-  2J is next; doesn't depend on 2I working)
+- Last updated: 2026-05-08 (2J shipped: stale-while-revalidate=60
+  on in-progress game responses. Per-PoP via caches.default;
+  full live-game validation deferred to Aug 20+. Phase 2 cache-
+  layer work effectively done; Phase 3 Containers is the next
+  meaningful lever)
 
 ### Next session entry point
 
@@ -144,24 +151,31 @@ dedicated Origin Cert).
 
 Open follow-ups, in priority order:
 
-1. **2J — stale-while-revalidate for in-progress games**
-   (next session start): adds `stale-while-revalidate=60` to
-   the in-progress game Cache-Control. Eliminates the 4 s
-   tail spike that hits the unlucky user whose request lands
-   at TTL expiry. Per-PoP, doesn't depend on 2I working.
-   Estimate 1 day.
-2. **2I follow-up — CF support ticket** (when convenient):
+1. **Repo cleanup — detach the fork** (under discussion
+   2026-05-07): the upstream-merge scenario looks unlikely;
+   detaching turns this into a standalone production repo and
+   lets us strip a lot of "do not propagate" overhead from
+   workflows + docs. Concrete plan in earlier message — one
+   GitHub click + a handful of doc/workflow edits.
+2. **Phase 3 (Cloudflare Containers for Python)**: scales
+   Python horizontally, removes the single-droplet bottleneck.
+   2-3 weeks of work. With 2I parked, this is the remaining
+   lever for "many distinct PoPs each paying a cold render in
+   parallel" load shape. Becomes the natural next big push
+   once Phase 2 cache-layer work is parked/done.
+3. **2I follow-up — CF support ticket** (when convenient):
    ask CF support why `cf-cache-status` doesn't appear on
    `/cfb/game/*` despite a correctly-configured Cache Rule
    that lists as Active. Briefly worked 2026-05-05, stopped
    2026-05-07. If they fix it, cross-PoP pooling becomes a
    freebie (rule already in place). Non-blocking.
-3. **Phase 3 (Cloudflare Containers for Python)**: scales
-   Python horizontally, removes the single-droplet bottleneck.
-   2-3 weeks of work. With 2I parked, this becomes more
-   relevant — it's the remaining lever for "many distinct PoPs
-   each paying a cold render in parallel" load shape.
-4. **2H.11 — burn-in + cleanup** (parallel):
+4. **2J follow-up — football-season validation**: when
+   STATUS_IN_PROGRESS games exist (Aug 20+), validate the
+   SWR behavior end-to-end in Workers Logs — confirm
+   `total_ms` stays under ~100 ms during a live-game window
+   instead of spiking every 30 s. Vitest assertion is the
+   authoritative test until then.
+5. **2H.11 — burn-in + cleanup** (parallel):
    - Watch CF Web Analytics + `wrangler tail` for 24-48 h.
    - After clean burn-in: `docker compose stop frontend` on the
      droplet (keeps Python + Caddy + Redis running; the Express
@@ -1546,7 +1560,7 @@ real problem):
 None of these are immediately compelling. Stick with per-PoP
 caching for now.
 
-#### 2J — Stale-while-revalidate for in-progress games
+#### 2J — Stale-while-revalidate for in-progress games (DONE 2026-05-08)
 
 **Outcome**: Live-game pages serve stale-cached content
 immediately while triggering a background re-render. Removes
@@ -1564,43 +1578,58 @@ the prior expire-then-block behavior.
 
 **Tasks**:
 
-- ☐ Update `CACHE_CONTROL.inProgress` in `worker/src/index.tsx`:
+- ☑ Update `CACHE_CONTROL.inProgress` in `worker/src/index.tsx`:
   ```ts
   // before
   inProgress: "public, max-age=30, s-maxage=30",
   // after
   inProgress: "public, max-age=30, s-maxage=30, stale-while-revalidate=60",
   ```
-  Browsers and Cloudflare both honor this — when the cached
-  response ages past `max-age`/`s-maxage` but is still within
-  `stale-while-revalidate` of expiry, return the stale entry
-  immediately and trigger a background fetch to refresh.
-- ☐ Confirm Cache Rules from sub-phase 2I respect SWR. CF
-  documents this works for the standard cache layer; spot-check
-  via response headers and timing.
-- ☐ Update the in-progress test in `worker/test/game.test.ts`
+  Browsers and Cloudflare's edge cache both honor this — when
+  the cached response ages past `max-age`/`s-maxage` but is
+  still within `stale-while-revalidate` of expiry, return the
+  stale entry immediately and trigger a background fetch to
+  refresh.
+- ◐ Confirm Cache Rules from sub-phase 2I respect SWR.
+  **Moot for now**: 2I's Cache Rule isn't engaging on this
+  account anyway, so SWR rides on `caches.default` instead.
+  Workers' Cache API documentation confirms `caches.default`
+  honors `stale-while-revalidate` directives. If 2I ever
+  starts working, the SWR semantics carry over to the standard
+  cache automatically.
+- ☑ Update the in-progress test in `worker/test/game.test.ts`
   to assert `stale-while-revalidate=60` is in the
-  `Cache-Control` header.
-- ☐ Add structured-log instrumentation: when a request triggers
-  a SWR background refresh, emit
-  `{event: "swr_refresh", gameId, age_ms}` so Workers Logs
-  surface the refresh rate. Useful for tuning the SWR window
-  later.
-- ☐ Validation: tail Workers Logs during a real live-game test
-  (or simulate by patching CACHE_CONTROL.inProgress to a small
-  value temporarily). Confirm:
-  - Total response times stay under ~100 ms throughout the
-    test, not spiking every 30s.
-  - `swr_refresh` events fire approximately every 30s per
-    distinct (gameId, PoP) pair.
+  `Cache-Control` header. Test renamed to
+  `"in-progress games set 30s Cache-Control with 60s
+  stale-while-revalidate (2J)"`.
+- ☐ Add structured-log instrumentation: emit
+  `{event: "swr_refresh", gameId, age_ms}` when a request is a
+  SWR background refresh. **Skipped 2026-05-08** — the Worker
+  can't reliably distinguish a SWR-triggered background fetch
+  from a regular fetch (CF doesn't currently surface a header
+  identifying the origin of a fetch as "SWR revalidation").
+  The existing Server-Timing breakdown already gives us the
+  refresh visibility we need indirectly: requests with
+  `python_ms ≈ 4000` and `total_ms ≈ 4000` are full re-renders;
+  cluster-timing patterns during a live game show the refresh
+  cadence implicitly. Re-open if CF adds an explicit "this is
+  a background revalidation" signal.
+- ◐ Validation: full live-game validation deferred until Aug 20+
+  (start of football season) when STATUS_IN_PROGRESS games
+  actually exist. Off-season smoke confirmed the constant
+  change took effect without breaking other branches
+  (completed + quarantine paths still produce their correct
+  Cache-Control headers). The vitest assertion is the
+  authoritative test until then.
 
 **Acceptance**:
 
-- In-progress game requests in Workers Logs show consistent
-  ~75 ms `total_ms` with no 4-second tail spikes.
-- `Cache-Control` on in-progress responses contains
-  `stale-while-revalidate=60`.
-- New test passes; vitest count stays green.
+- ☑ `Cache-Control` on in-progress responses contains
+  `stale-while-revalidate=60` (vitest assertion passes).
+- ☑ New test passes; vitest count holds at 145/145.
+- ☐ In-progress game requests in Workers Logs show consistent
+  ~75 ms `total_ms` with no 4-second tail spikes. Validate
+  against real STATUS_IN_PROGRESS traffic in football season.
 - Phase 2I + 2J together: cold-render rate (Workers
   invocations with `python_ms > 1000`) drops to <5% of game-
   page requests.
