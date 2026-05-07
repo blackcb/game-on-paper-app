@@ -348,7 +348,7 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     expect(body).toContain("quarantined due to issues with underlying ESPN data");
   });
 
-  it("Python failure on a non-quarantined game routes to game_error pbp branch (NOT cached)", async () => {
+  it("Python failure on a non-quarantined game routes to game_error pbp branch with no-store", async () => {
     const id = uniqueGameId();
     let firstCall = true;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -361,11 +361,13 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     });
     const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
     expect(res.status).toBe(200);
-    // Error responses go through Hono's c.html() and intentionally
-    // do NOT carry our Cache-Control — they're not put into the cache.
-    expect(res.headers.get("cache-control")).not.toBe(
-      "public, max-age=86400, s-maxage=31536000",
-    );
+    // Sub-phase 2I makes the error Cache-Control load-bearing:
+    // when the standard CF cache is fronting the Worker via Cache
+    // Rules + Origin Cache Control, an error response without
+    // explicit Cache-Control could fall through to a default
+    // cacheable behavior. `no-store` keeps the cache from holding
+    // a stale error past the underlying issue resolving.
+    expect(res.headers.get("cache-control")).toBe("no-store, max-age=0");
     const body = await res.text();
     expect(body).toContain("There is no play-by-play data available for this game");
   });

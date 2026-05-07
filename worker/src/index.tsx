@@ -501,6 +501,14 @@ const CACHE_CONTROL = {
   // Quarantine entries are static (fork-maintained list); 1 day
   // matches the Express side's gut feel.
   quarantine: "public, max-age=86400, s-maxage=86400",
+  // Errors must NEVER be cached — the underlying Python/ESPN
+  // failure may resolve in the next minute. Sub-phase 2I (Cache
+  // Rules + Origin Cache Control) makes this header load-bearing:
+  // without it, the standard CF cache could fall through to its
+  // default-cacheable behavior on a 200-status error response.
+  // `no-store` is stricter than `no-cache` — explicit "do not
+  // store this response anywhere".
+  errorNoStore: "no-store, max-age=0",
 } as const;
 
 // Wrap a JSX element in a Response with the chosen Cache-Control.
@@ -530,13 +538,35 @@ app.get("/cfb/game/:gameId", async (c) => {
     c.req.query("json") === "true" || c.req.query("json") === "1";
   const previewMode = c.req.query("preview_mode");
 
-  // Cache API fast path. Keyed by the full request URL so
-  // `?json=1` and `?preview_mode=...` get distinct entries
-  // automatically.
+  // Cache layer for /cfb/game/* uses both:
+  //   1. CF's standard cache via the Cache Rule from sub-phase 2I
+  //      (Caching → Cache Rules → game-page-edge-cache; hostname=
+  //      sports.unseen-university.org AND path starts_with
+  //      /cfb/game/; Edge TTL = "Use cache-control header if
+  //      present, bypass cache if not"). The rule short-circuits
+  //      before the Worker runs on cache HIT.
+  //   2. Explicit `caches.default.put` from the Worker (below)
+  //      to actually populate the cache the Cache Rule reads.
+  //
+  // Initially I tried dropping (2) — assuming Cache-Control on the
+  // Worker's response would auto-populate via Origin Cache Control
+  // mode. Empirically that's wrong: with no explicit
+  // `caches.default.put`, the standard cache layer never holds a
+  // copy and `cf-cache-status` doesn't appear on responses at all
+  // (validated 2026-05-07). So the Worker still needs to put.
+  //
+  // We DROP the `caches.default.match` at the top of the route
+  // because the Cache Rule handles HITs at the edge before the
+  // Worker runs — by the time we get here, this PoP definitely
+  // missed and the Worker needs to render fresh.
+  //
+  // Cross-PoP pooling: doesn't engage on this plan even with
+  // Smart Tiered Cache enabled (validated 2026-05-05; see
+  // "2I — outcome (validated 2026-05-05)" Notes section).
+  // So per-PoP caching is what we get; the Cache Rule's win is
+  // "skip the Worker on same-PoP hits".
   const cache = caches.default;
   const cacheKey = new Request(c.req.url, { method: "GET" });
-  const cachedResponse = await time(c, "cache_lookup", () => cache.match(cacheKey));
-  if (cachedResponse) return cachedResponse;
 
   // Quarantine gate runs before ESPN — short-circuits the probe
   // entirely. We still need the gameInfo for the error template's
@@ -616,11 +646,10 @@ app.get("/cfb/game/:gameId", async (c) => {
     return response;
   }
 
-  // Past or live game → fetch processed PBP via Python (no cache
-  // layer in lib/games anymore — the Cache API above plays that
-  // role). Errors render game_error and are NOT cached so a Python
-  // outage doesn't pin the user to a stale error page once Python
-  // recovers.
+  // Past or live game → fetch processed PBP via Python. Errors
+  // render game_error with explicit no-store so the standard
+  // cache (per Cache Rule from 2I) won't hold the failure past
+  // the underlying Python/ESPN issue resolving.
   let data: ProcessedGameData;
   try {
     data = await time(c, "python", () =>
@@ -634,14 +663,16 @@ app.get("/cfb/game/:gameId", async (c) => {
         error: (err as Error).message,
       }),
     );
-    return c.html(
-      <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="pbp" />,
-    );
+    const html = (
+      <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="pbp" />
+    ).toString();
+    return cachedHtml(html, CACHE_CONTROL.errorNoStore);
   }
   if (data.gameInfo == null) {
-    return c.html(
-      <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="pbp" />,
-    );
+    const html = (
+      <GameErrorPage gameInfo={competition as GameErrorGameInfo} errorType="pbp" />
+    ).toString();
+    return cachedHtml(html, CACHE_CONTROL.errorNoStore);
   }
 
   const completed = data.gameInfo.status?.type?.completed === true;

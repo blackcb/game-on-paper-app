@@ -93,21 +93,26 @@ USER ACTION step without confirmation from the user.**
     9 ms (KV-cached). See 2H.10b for full benchmark, 2H.10c
     for the post-burn-in summary-service follow-up that
     closed the leaderboard/charts gap.
-  - 2I (Cache Rules + Origin Cache Control): **planned**.
-    Cross-PoP pooling for `/cfb/game/*` via Cloudflare's
-    standard cache (which Tiered Cache pools, unlike
-    `caches.default`). Estimate 1-2 days.
+  - 2I (Cache Rules + Origin Cache Control): **attempted +
+    parked 2026-05-07**. Cache Rule configured correctly per
+    spec — filter, eligibility, Edge TTL all right — but
+    `cf-cache-status` never appears on `/cfb/game/*` responses
+    on this account. Briefly worked the day we set it up
+    (2026-05-05) then stopped. CF support territory. Worker
+    continues with `caches.default` (per-PoP); cross-PoP
+    pooling stays an open question. Defensive win kept:
+    `CACHE_CONTROL.errorNoStore` so error responses won't
+    incorrectly cache if the rule ever engages.
   - 2J (Stale-while-revalidate for in-progress games):
-    **planned**, after 2I. Eliminates 4 s tail spikes at
-    cache-expiry. Estimate 1 day.
+    **next**. Doesn't depend on 2I (operates on per-PoP cache).
+    Eliminates 4 s tail spikes at cache-expiry. Estimate 1 day.
   - vitest suite: 143 assertions across 12 files, ~5.9 s.
 - **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-04 (Phase 2H end-to-end live; added
-  scoreboard ESPN-flake catch; validated `caches.default`
-  per-PoP constraint; planned 2I/2J as the resolution path
-  (Cache Rules + SWR) and reordered Phase 3 Containers to
-  follow them)
+- Last updated: 2026-05-07 (2I attempted: Cache Rule configured
+  correctly but doesn't engage on this account — CF support
+  territory. Defensive `errorNoStore` Cache-Control kept.
+  2J is next; doesn't depend on 2I working)
 
 ### Next session entry point
 
@@ -139,29 +144,24 @@ dedicated Origin Cert).
 
 Open follow-ups, in priority order:
 
-1. **2I — Cache Rules + Origin Cache Control** (next session
-   start): adds a Cache Rule for `/cfb/game/*` that defers TTL
-   to the Worker's Cache-Control header. This puts game-page
-   responses into Cloudflare's standard cache layer, which
-   Tiered Cache pools across PoPs (the Workers Cache API does
-   not — empirically validated in the "2D — discovered
-   constraint" Notes section). Net win: one viewer warms one
-   PoP → upper-tier cache hub → every other PoP serves a
-   tiered hit instead of running the Worker against origin.
-   Estimate 1-2 days.
-2. **2J — stale-while-revalidate for in-progress games**:
-   adds `stale-while-revalidate=60` to the in-progress game
-   Cache-Control. Eliminates the 4 s tail spike that hits
-   the unlucky user whose request lands at TTL expiry.
-   Estimate 1 day. Pairs naturally with 2I.
+1. **2J — stale-while-revalidate for in-progress games**
+   (next session start): adds `stale-while-revalidate=60` to
+   the in-progress game Cache-Control. Eliminates the 4 s
+   tail spike that hits the unlucky user whose request lands
+   at TTL expiry. Per-PoP, doesn't depend on 2I working.
+   Estimate 1 day.
+2. **2I follow-up — CF support ticket** (when convenient):
+   ask CF support why `cf-cache-status` doesn't appear on
+   `/cfb/game/*` despite a correctly-configured Cache Rule
+   that lists as Active. Briefly worked 2026-05-05, stopped
+   2026-05-07. If they fix it, cross-PoP pooling becomes a
+   freebie (rule already in place). Non-blocking.
 3. **Phase 3 (Cloudflare Containers for Python)**: scales
    Python horizontally, removes the single-droplet bottleneck.
-   2-3 weeks of work. Defer until after 2I/2J — those address
-   the same goals (latency + concurrent users) at a fraction
-   of the cost. If 2I+2J reduce the cold-render rate to <5%
-   of game-page traffic, Phase 3 becomes a "nice-to-have"
-   rather than a "must-do."
-4. **2H.11 — burn-in + cleanup** (parallel to 2I/2J):
+   2-3 weeks of work. With 2I parked, this becomes more
+   relevant — it's the remaining lever for "many distinct PoPs
+   each paying a cold render in parallel" load shape.
+4. **2H.11 — burn-in + cleanup** (parallel):
    - Watch CF Web Analytics + `wrangler tail` for 24-48 h.
    - After clean burn-in: `docker compose stop frontend` on the
      droplet (keeps Python + Caddy + Redis running; the Express
@@ -1467,78 +1467,84 @@ If anything looks broken after the Custom Domain flip:
    show the Express response (no `cf-worker` header).
 4. Investigate, fix, re-add the Custom Domain when ready.
 
-#### 2I — Cache Rules + Origin Cache Control (cross-PoP pooling)
+#### 2I — Cache Rules + Origin Cache Control (attempted 2026-05-05 → 2026-05-07)
 
-**Outcome**: Game-page responses cached in Cloudflare's standard
-cache via Cache Rules instead of (only) the Workers Cache API.
-The standard cache is what Smart Tiered Cache pools across PoPs;
-the Workers Cache API is per-PoP only (proven empirically — see
-"2D — discovered constraint" Notes section). Net effect: first
-viewer warms one PoP → upper-tier cache hub gets the response →
-every other PoP serves a tiered hit instead of running the
-Worker against origin. Removes the "every PoP pays one cold
-render per cacheable URL" pattern.
+**Original outcome (intended)**: Game-page responses cached in
+Cloudflare's standard cache via Cache Rules. The standard cache
+is what Smart Tiered Cache pools across PoPs; the Workers Cache
+API is per-PoP only (see "2D — discovered constraint"). Net
+effect intended: first viewer warms one PoP → upper-tier cache
+hub gets the response → every other PoP serves a tiered hit.
 
-**Estimate**: 1-2 days (mostly dashboard config + small Worker
-tweak + multi-region validation).
+**Actual outcome**: ❌ **Cache Rule does not engage on this
+account/setup, even with correct configuration.** Spent three
+sessions verifying:
 
-**Rollback**: Delete the Cache Rule in CF dashboard. The
-Worker's `caches.default` path keeps working as it does today
-(per-PoP only) — strictly no worse than the current state.
+- ☑ Cache Rule created with the right filter
+  `(http.host eq "sports.unseen-university.org" and starts_with(http.request.uri.path, "/cfb/game/"))`.
+- ☑ Cache Eligibility = Eligible for cache.
+- ☑ Edge TTL = "Use cache-control header if present, bypass
+  cache if not" (the Origin Cache Control mode).
+- ☑ Worker's outgoing Cache-Control headers correct for every
+  branch (completed/in-progress/pregame/quarantine/errors).
+- ☑ Errors get `Cache-Control: no-store, max-age=0` (new
+  `CACHE_CONTROL.errorNoStore` constant). **Kept as a
+  defensive measure regardless of 2I outcome.**
+- ☑ Cache Rule list shows status "Active".
+- ☐ `cf-cache-status` header NEVER appears on `/cfb/game/*`
+  responses, with or without `caches.default.put` from the
+  Worker. By contrast, `/assets/*` (Phase 0 cache rule)
+  shows `cf-cache-status: HIT` consistently — proves CF's
+  cache plumbing is reachable from this zone in general.
 
-**Tasks**:
+**One day of false-positive earlier**: on 2026-05-05 immediately
+after creating the rule, smoke checks DID show
+`cf-cache-status: HIT, age:121` on a same-PoP repeat hit. By
+2026-05-07 morning that had stopped — same URL pattern, same
+rule config, no `cf-cache-status` at all. Possible explanation:
+the Tiered Cache UI's "Origin Configuration" panel has had a
+persistent generic error since we noticed it, and that may be
+correlated with whatever account-level state controls Cache
+Rules engagement for Workers-routed paths. Could also be a CF
+platform change that rolled out between 2026-05-05 and
+2026-05-07.
 
-- ☐ Verify the Worker's outgoing `Cache-Control` headers on
-  `/cfb/game/:gameId` for each branch:
-  - completed: `public, max-age=86400, s-maxage=31536000`
-  - in-progress: `public, max-age=30, s-maxage=30`
-  - pregame: `public, max-age=300, s-maxage=300`
-  - quarantine: `public, max-age=86400, s-maxage=86400`
-  - errors: no `Cache-Control` (must NOT be cached)
-- ☐ Add a CF Cache Rule via dashboard:
-  - Filter: `URI Path matches /cfb/game/*` AND `Hostname equals
-    sports.unseen-university.org`
-  - Cache Eligibility: **Eligible for cache**
-  - Edge TTL: **Use cache-control header from origin** (CF dashboard's
-    "Origin Cache Control" mode — exact label varies by UI revision).
-  - Browser TTL: respect Cache-Control max-age.
-- ☐ Decide whether to drop `caches.default.match`/`put` from the
-  game route. Two options:
-  - **Drop entirely**: Cache Rules become the only cache layer
-    for game pages. Simpler code, slightly cleaner.
-  - **Keep as a per-PoP fast path**: Worker checks its local
-    cache before falling through to Cache Rules. Marginal latency
-    win on already-warm PoPs (skip the std-cache layer's lookup).
-  - Recommendation: **drop**, simplify. The std-cache lookup is
-    sub-ms; not worth carrying two cache layers.
-- ☐ Verify error responses still bypass the cache. Test: hit a
-  known-error URL twice via cache-busted query, second response
-  must NOT show `cf-cache-status: HIT`.
-- ☐ Multi-region validation using the same methodology as
-  "2D — discovered constraint":
-  - Pick a quarantined gameId (so the cold render is fast
-    enough for check-host.net's probe timeout).
-  - Pick a unique cache-bust value.
-  - Warm one PoP from local laptop.
-  - Trigger `check-host.net/check-http?host=...&max_nodes=10`.
-  - Read structured request logs via `wrangler tail`. Worker
-    invocation count should drop from ~10 (per-PoP) to 1-2
-    (one warm fill + tiered cache for the rest).
-- ☐ Watch CF dashboard → Caching → Tiered Cache hit ratio for
-  game-page traffic over the first 24h.
+**Decision: park 2I, leave config in place, move on.** The
+Cache Rule is harmless when not engaging (zero overhead); if
+CF resolves whatever is keeping it from matching, it'll start
+working without code changes. The Worker continues to use
+`caches.default` (per-PoP) — same architectural shape as
+pre-2I. Cross-PoP pooling stays an open question; revisit
+if we ever open a CF support ticket or upgrade to a plan
+where Cache Rules x Workers Routes is documented to work.
 
-**Acceptance**:
+**Code wins kept from this attempt**:
 
-- Multi-region check-host.net test shows ≥ 70% of requests
-  hitting cache without a Worker invocation (vs the current
-  ~10% — only same-PoP repeats).
-- CF Tiered Cache Hit Ratio for `/cfb/game/*` ≥ 80% within
-  48h of deploy.
-- Error responses (game_error template) consistently show
-  `cf-cache-status: MISS` or absent — never `HIT`.
-- 145+ vitest tests pass (no regression in unit suite).
-- Production smoke: `cf-cache-status: HIT` on a fresh PoP for
-  a URL warmed by another region.
+- ☑ `CACHE_CONTROL.errorNoStore = "no-store, max-age=0"` and
+  applied to game-error responses. Defensive — if Cache Rule
+  ever DOES engage, error responses won't be incorrectly
+  cached. Test in `worker/test/game.test.ts` updated to
+  assert this header on the pbp-error path.
+
+**Cross-PoP pooling alternatives** (if it ever becomes a
+real problem):
+
+1. **CF support ticket**: ask whether Smart Tiered Cache
+   pools Workers-routed responses on Workers Paid plan, and
+   whether the Origin Configuration UI error is related.
+2. **Workers KV-backed page cache**: use KV (globally
+   replicated) instead of Cache API. Much slower than Cache
+   API per-read (~50-100 ms vs <10 ms) but actually pools
+   across PoPs. Probably worse per-request than per-PoP
+   Cache API for the warm path, but might be worth it for
+   the cold path on rare regions.
+3. **Phase 3 (Containers) renders Phase 4 less acute**:
+   Containers reduce Python pipeline time from 4 s → maybe
+   1-2 s (no inter-container network hop, faster cold
+   start). Cold-render in each PoP becomes more affordable.
+
+None of these are immediately compelling. Stick with per-PoP
+caching for now.
 
 #### 2J — Stale-while-revalidate for in-progress games
 
