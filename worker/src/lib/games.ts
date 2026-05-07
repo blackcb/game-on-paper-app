@@ -1,3 +1,4 @@
+import type { BackendFetch } from "./backends";
 import { logSchemaFailure, validateProcessResponse } from "./schema";
 
 // Replaces frontend/cfb/games.js. Per-game PBP retrieval: calls the
@@ -129,21 +130,17 @@ interface ProcessResponse {
 // Failures are warn-only — Python is the canonical validator so
 // rejecting here would turn schema drift into user-visible errors.
 export async function fetchAndShapePBP(
-  pythonBase: string,
+  // Sub-phase 3B: takes a `BackendFetch` from lib/backends.ts so the
+  // call site doesn't have to know whether Python is reached via
+  // HTTPS to the droplet (with X-Worker-Secret stamping) or via
+  // a Cloudflare Container DO binding. The toggle lives in the env
+  // (`PYTHON_BACKEND`); see SEASON-MODES.md for the deploy story.
+  python: BackendFetch,
   gameId: string | number,
-  // Sub-phase 2H: when the Worker is hitting Python through a
-  // public Caddy hostname, send a shared-secret header so Caddy
-  // can deny anything that didn't originate from this Worker.
-  // Optional so local dev (talking to a localhost Python) and the
-  // pre-cutover Docker-internal path both still work without a
-  // secret.
-  workerSecret?: string | null,
 ): Promise<ProcessedGameData> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (workerSecret) headers["X-Worker-Secret"] = workerSecret;
-  const response = await fetch(`${pythonBase}/cfb/process`, {
+  const response = await python("/cfb/process", {
     method: "POST",
-    headers,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ gameId }),
   });
   if (!response.ok) {

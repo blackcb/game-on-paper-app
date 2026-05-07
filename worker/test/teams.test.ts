@@ -2,6 +2,10 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTeamInformation, getTeamSeasonInformation } from "../src/lib/teams";
 import { retrieveTeamData } from "../src/lib/summary";
+import { dropletFetch } from "../src/lib/backends";
+
+const TEST_SUMMARY_BASE = "https://summary.example.test";
+const teamCfg = () => ({ kv: env.LEAGUE_DATA, fetch: dropletFetch(TEST_SUMMARY_BASE) });
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -128,7 +132,7 @@ describe("retrieveTeamData", () => {
     const sample = [{ teamId: 333, team: "Alabama", overall: { adjEpaPerPlay: 0.4 } }];
     await env.LEAGUE_DATA.put("2024-333-overall", JSON.stringify(sample));
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const data = await retrieveTeamData({ kv: env.LEAGUE_DATA, base: "https://summary.example.test" }, 2024, 333, "overall");
+    const data = await retrieveTeamData(teamCfg(), 2024, 333, "overall");
     expect(data).toEqual(sample);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -138,7 +142,7 @@ describe("retrieveTeamData", () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ results: sample }));
-    const data = await retrieveTeamData({ kv: env.LEAGUE_DATA, base: "https://summary.example.test" }, 2023, 99, "overall");
+    const data = await retrieveTeamData(teamCfg(), 2023, 99, "overall");
     expect(data).toEqual(sample);
     expect(fetchSpy).toHaveBeenCalledOnce();
     const cached = await env.LEAGUE_DATA.get("2023-99-overall");
@@ -152,7 +156,7 @@ describe("retrieveTeamData", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("nope", { status: 503 }),
     );
-    const data = await retrieveTeamData({ kv: env.LEAGUE_DATA, base: "https://summary.example.test" }, 2015, 7777, "overall");
+    const data = await retrieveTeamData(teamCfg(), 2015, 7777, "overall");
     expect(data.length).toBeGreaterThan(0);
     expect(data[0].teamId).toBe(7777);
     expect(data[0].pos_team).toBe(7777);

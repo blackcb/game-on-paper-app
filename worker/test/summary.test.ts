@@ -5,6 +5,7 @@ import {
   retrieveLeagueData,
   type TeamLeagueRow,
 } from "../src/lib/summary";
+import { dropletFetch } from "../src/lib/backends";
 
 // vitest-pool-workers 0.15 (Vitest 4) doesn't expose the legacy
 // `fetchMock` symbol from `cloudflare:test`. We stub `globalThis.fetch`
@@ -38,16 +39,19 @@ const jsonResponse = (body: unknown, init: ResponseInit = {}) =>
 // SummaryConfig as the route handler builds it. The base URL is
 // arbitrary in tests since we mock fetch — pick something
 // recognizable so URL assertions can grep for it.
+//
+// 3B: SummaryConfig now bundles a `BackendFetch` rather than raw
+// base+secret. Use `dropletFetch` (the same factory production uses
+// when SUMMARY_BACKEND=droplet) so the existing fetch spies still
+// see prefixed URLs and the X-Worker-Secret header.
 const TEST_SUMMARY_BASE = "https://summary.example.test";
 const dataCfg = (secret?: string) => ({
   kv: env.LEAGUE_DATA,
-  base: TEST_SUMMARY_BASE,
-  secret,
+  fetch: dropletFetch(TEST_SUMMARY_BASE, secret),
 });
 const lastUpdatedCfg = (secret?: string) => ({
   kv: env.SUMMARY_LAST_UPDATED,
-  base: TEST_SUMMARY_BASE,
-  secret,
+  fetch: dropletFetch(TEST_SUMMARY_BASE, secret),
 });
 
 describe("retrieveLeagueData", () => {

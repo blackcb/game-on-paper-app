@@ -6,6 +6,7 @@ import {
   cleanName,
   fetchAndShapePBP,
 } from "../src/lib/games";
+import { dropletFetch } from "../src/lib/backends";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -119,7 +120,7 @@ describe("games lib", () => {
         awayTeamId: "333",
       };
       vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse(pythonResponse));
-      const data = await fetchAndShapePBP("http://python:7000", "401002");
+      const data = await fetchAndShapePBP(dropletFetch("http://python:7000"), "401002");
       expect(data.gameInfo?.status?.type?.completed).toBe(false);
       expect(Array.isArray(data.scoringPlays)).toBe(true);
       // box_score (snake) gets renamed to advBoxScore and removed from
@@ -132,9 +133,9 @@ describe("games lib", () => {
       vi.spyOn(globalThis, "fetch").mockImplementation(
         async () => new Response("nope", { status: 503 }),
       );
-      await expect(fetchAndShapePBP("http://python:7000", "401003")).rejects.toThrow(
-        /returned 503/,
-      );
+      await expect(
+        fetchAndShapePBP(dropletFetch("http://python:7000"), "401003"),
+      ).rejects.toThrow(/returned 503/);
     });
 
     it("sends the X-Worker-Secret header when a secret is provided", async () => {
@@ -148,7 +149,10 @@ describe("games lib", () => {
           awayTeamId: "333",
         }),
       );
-      await fetchAndShapePBP("https://python.example.com", "401005", "shhhh-its-a-secret");
+      await fetchAndShapePBP(
+        dropletFetch("https://python.example.com", "shhhh-its-a-secret"),
+        "401005",
+      );
       expect(fetchSpy).toHaveBeenCalledOnce();
       const init = fetchSpy.mock.calls[0]![1] as RequestInit;
       const headers = new Headers(init.headers as HeadersInit);
@@ -167,7 +171,7 @@ describe("games lib", () => {
           awayTeamId: "333",
         }),
       );
-      await fetchAndShapePBP("http://python:7000", "401006");
+      await fetchAndShapePBP(dropletFetch("http://python:7000"), "401006");
       const init = fetchSpy.mock.calls[0]![1] as RequestInit;
       const headers = new Headers(init.headers as HeadersInit);
       expect(headers.get("X-Worker-Secret")).toBeNull();
@@ -189,7 +193,7 @@ describe("games lib", () => {
         awayTeamId: "333",
       };
       vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse(pythonResponse));
-      const data = await fetchAndShapePBP("http://python:7000", "401004");
+      const data = await fetchAndShapePBP(dropletFetch("http://python:7000"), "401004");
       expect(data.plays![0].winProbability!.after).toBe(1.0);
     });
   });
@@ -274,16 +278,20 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     expect(body).toContain("var gameData =");
   });
 
-  it("completed games set the long s-maxage Cache-Control", async () => {
+  it("completed games set long s-maxage Cache-Control with stale-if-error fallback (3B Layer E)", async () => {
     const id = uniqueGameId();
     mockEspnThenPython(undefined, pythonPbpResponse());
     const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
+    // Sub-phase 3B Layer E: `stale-if-error=86400` lets caches
+    // serve the last cached body for up to 24 h if the origin
+    // 5xxs. Closes the gap when a cache miss lands on a Cloudflare
+    // Container in image-pull cold start.
     expect(res.headers.get("cache-control")).toBe(
-      "public, max-age=86400, s-maxage=31536000",
+      "public, max-age=86400, s-maxage=31536000, stale-if-error=86400",
     );
   });
 
-  it("in-progress games set 30s Cache-Control with 60s stale-while-revalidate (2J)", async () => {
+  it("in-progress games set 30s Cache-Control with SWR=60 and stale-if-error=86400 (2J + 3B Layer E)", async () => {
     const id = uniqueGameId();
     const inProgressGameInfo = sampleGameInfo({
       status: { type: { name: "STATUS_IN_PROGRESS", completed: false, detail: "Q3 5:21" } },
@@ -296,12 +304,14 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     });
     mockEspnThenPython(inProgressGameInfo, inProgressPython);
     const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
-    // Sub-phase 2J: SWR=60 lets the cache serve stale up to 60 s
-    // past expiry while triggering a background refresh. The
-    // unlucky user whose request lands at TTL expiry no longer
-    // waits 4 s for the Python pipeline.
+    // 2J: SWR=60 lets the cache serve stale up to 60 s past expiry
+    // while triggering a background refresh. The unlucky user
+    // whose request lands at TTL expiry no longer waits 4 s for
+    // the Python pipeline.
+    // 3B Layer E: stale-if-error=86400 absorbs container 5xxs
+    // (e.g., cold-start timeout) by serving last cached for 24 h.
     expect(res.headers.get("cache-control")).toBe(
-      "public, max-age=30, s-maxage=30, stale-while-revalidate=60",
+      "public, max-age=30, s-maxage=30, stale-while-revalidate=60, stale-if-error=86400",
     );
   });
 
@@ -312,7 +322,7 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/json");
     expect(res.headers.get("cache-control")).toBe(
-      "public, max-age=86400, s-maxage=31536000",
+      "public, max-age=86400, s-maxage=31536000, stale-if-error=86400",
     );
     const body = (await res.json()) as { gameInfo: { id: string } };
     expect(body.gameInfo.id).toBe("401628412");

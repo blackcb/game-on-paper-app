@@ -102,6 +102,68 @@ PYTHON_BASE_URL = "https://python.unseen-university.org"
 # but for the cfb-team-summaries container (used by leaderboards,
 # trends, EPA chart, team pages, and pregame matchup percentiles).
 # Caddy on the droplet fronts the summary container at this URL with
-# the same X-Worker-Secret gate. Sub-phase 3B replaces both URLs +
-# the secret with Container bindings.
+# the same X-Worker-Secret gate.
 SUMMARY_BASE_URL = "https://summary.unseen-university.org"
+# Sub-phase 3B backend toggle. lib/backends.ts reads these to pick
+# the per-request transport. Defaulting to "droplet" preserves
+# pre-3B behavior on every deploy of this base file; flip to
+# "container" at the 3D cutover. See worker/SEASON-MODES.md.
+PYTHON_BACKEND = "droplet"
+SUMMARY_BACKEND = "droplet"
+# 3B sleepAfter driver (read by Container subclass in src/containers.ts).
+# This file is the "normal" weekday-in-season profile.
+SEASON_MODE = "normal"
+# 3C cron-warm gates (Layers B + C). `normal` keeps Layer B
+# (healthcheck warm) on, Layer C (per-game pre-warm) off — Wednesday
+# nights have one MAC midweek game, pre-warming 10 of them is waste.
+# Both gates remain "0" until the cron handlers ship; flip to "1" /
+# "8-10" at that point.
+CRON_WARM_ENABLED = "0"
+PREWARM_TOP_N = "0"
+
+# Sub-phase 3B: Cloudflare Container bindings. The Container DO
+# subclasses are exported from src/index.tsx (re-exported from
+# src/containers.ts). `instance_type = "standard-2"` and
+# `constraints.regions` were chosen in 3A.7 measurements; image
+# tags (`gop-python:slim`, `gop-summary:slim`) come from 3A.6 / 3A.6b.
+[[containers]]
+class_name = "PythonContainer"
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim"
+max_instances = 5
+instance_type = "standard-2"
+constraints = { regions = ["ENAM", "WNAM"] }
+
+[[containers]]
+class_name = "SummaryContainer"
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-summary:slim"
+max_instances = 3
+instance_type = "standard-2"
+constraints = { regions = ["ENAM", "WNAM"] }
+
+[[durable_objects.bindings]]
+name = "PYTHON_CONTAINER"
+class_name = "PythonContainer"
+
+[[durable_objects.bindings]]
+name = "SUMMARY_CONTAINER"
+class_name = "SummaryContainer"
+
+# DOs need a migration to be created the first time. Bumping `tag`
+# is how you signal "these classes are new on this deploy" — once
+# applied to production the tag must not be reused for the same
+# new_sqlite_classes set.
+[[migrations]]
+tag = "v3-containers"
+new_sqlite_classes = ["PythonContainer", "SummaryContainer"]
+
+# Season-mode profiles for Saturdays in-season (`wrangler.peak.toml`)
+# and Feb–Jul (`wrangler.offseason.toml`) live alongside this file.
+# This file is the "normal" weekday-in-season config and is what a
+# bare `wrangler deploy` targets. Swap procedure documented in
+# worker/SEASON-MODES.md.
+#
+# Wrangler environments (`[env.peak]`, etc.) were considered and
+# rejected: they deploy to *separate* Workers (`sports-peak`,
+# `sports-normal`), not different configs of the same Worker.
+# Three separate config files keep all three modes pointing at the
+# same `sports` Worker — only the top-level config differs.

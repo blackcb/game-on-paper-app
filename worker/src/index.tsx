@@ -58,6 +58,13 @@ import {
 } from "./templates/TeamSeason";
 import { TrendsPage } from "./templates/Trends";
 import { time, timingMiddleware } from "./lib/timing";
+import { pythonBackend, summaryBackend } from "./lib/backends";
+import { PythonContainer, SummaryContainer } from "./containers";
+
+// Re-export the Container DO subclasses so wrangler can find them
+// at the Worker entry point (required by `[[durable_objects.bindings]]`
+// resolution and the `[[migrations]] new_sqlite_classes` step).
+export { PythonContainer, SummaryContainer };
 
 type Bindings = {
   // KV namespaces (2C). Bulk league/team summary cache + a small
@@ -65,33 +72,47 @@ type Bindings = {
   // wrangler.toml [[kv_namespaces]] entries.
   LEAGUE_DATA: KVNamespace;
   SUMMARY_LAST_UPDATED: KVNamespace;
-  // Python /cfb/process URL. Plain var for 2B; sub-phase 3B replaces
-  // this with a Container binding (`PBP_PROCESSOR.fetch(...)`) and
-  // the env var goes away.
+  // Python /cfb/process URL. Used when PYTHON_BACKEND === "droplet".
   PYTHON_BASE_URL: string;
   // Sub-phase 2H: when Python is exposed publicly through a Caddy
   // proxy on the droplet (so the Worker can reach it from CF
-  // edge), Caddy enforces an X-Worker-Secret header. The Worker
-  // sends c.env.WORKER_SHARED_SECRET on every Python call. Set
-  // via `wrangler secret put WORKER_SHARED_SECRET`. Optional so
-  // local dev or a future Container binding (3B) doesn't need it.
+  // edge), Caddy enforces an X-Worker-Secret header. lib/backends.ts
+  // stamps it on droplet-path requests. Set via
+  // `wrangler secret put WORKER_SHARED_SECRET`. Optional so local
+  // dev or the container path doesn't need it.
   WORKER_SHARED_SECRET?: string;
-  // Same shape as PYTHON_BASE_URL but for the summary service
-  // (cfb-team-summaries container at summary:3000 on the droplet).
-  // Caddy fronts it at https://summary.unseen-university.org with
-  // the same X-Worker-Secret gate. Sub-phase 3B will replace this
-  // alongside Python when both move to Cloudflare Containers.
+  // Same shape as PYTHON_BASE_URL but for the summary service.
   SUMMARY_BASE_URL: string;
+  // Sub-phase 3B: Cloudflare Container DO bindings. Defined in
+  // src/containers.ts; reachable via getContainer(env.X). Optional
+  // here so callers without container blocks in their wrangler
+  // config (e.g. a test env that skips them) still type-check.
+  PYTHON_CONTAINER?: DurableObjectNamespace<PythonContainer>;
+  SUMMARY_CONTAINER?: DurableObjectNamespace<SummaryContainer>;
+  // Backend toggle vars. lib/backends.ts reads these to pick
+  // droplet vs. container per-request. Defaulting to "droplet"
+  // anywhere unset preserves the pre-3B behavior; the cutover
+  // (3D) flips them to "container".
+  PYTHON_BACKEND?: string;
+  SUMMARY_BACKEND?: string;
+  // Drives sleepAfter on the Container DO subclasses (see
+  // src/containers.ts and SEASON-MODES.md). Only meaningful when
+  // PYTHON_BACKEND/SUMMARY_BACKEND === "container".
+  SEASON_MODE?: string;
+  // Cron-warm kill-switch + Layer C top-N knob (3C).
+  CRON_WARM_ENABLED?: string;
+  PREWARM_TOP_N?: string;
 };
 
 // Bundle the per-request summary-client config so route handlers
-// can pass one object into the lib/summary.ts retrieve* helpers
-// instead of threading three params.
+// can pass one object into the lib/summary.ts retrieve* helpers.
+// Sub-phase 3B: `fetch` is a `BackendFetch` from lib/backends.ts that
+// transparently routes through either the droplet HTTPS path or the
+// Cloudflare Container DO binding based on env.SUMMARY_BACKEND.
 function summaryCfg(c: Context<{ Bindings: Bindings }>) {
   return {
     kv: c.env.LEAGUE_DATA,
-    base: c.env.SUMMARY_BASE_URL,
-    secret: c.env.WORKER_SHARED_SECRET,
+    fetch: summaryBackend(c.env),
   };
 }
 
@@ -100,8 +121,7 @@ function summaryCfg(c: Context<{ Bindings: Bindings }>) {
 function lastUpdatedCfg(c: Context<{ Bindings: Bindings }>) {
   return {
     kv: c.env.SUMMARY_LAST_UPDATED,
-    base: c.env.SUMMARY_BASE_URL,
-    secret: c.env.WORKER_SHARED_SECRET,
+    fetch: summaryBackend(c.env),
   };
 }
 
@@ -488,7 +508,16 @@ function gameInfoFromEspnEnvelope(envelope: EspnPbpEnvelope) {
 const CACHE_CONTROL = {
   // Completed games: bytes the user sees never change. Browser 1
   // day, edge 1 year.
-  completed: "public, max-age=86400, s-maxage=31536000",
+  //
+  // Sub-phase 3B Layer E: `stale-if-error=86400` lets caches serve
+  // the last cached response for up to 24 h if the origin returns
+  // 5xx (or times out). On Cloudflare Containers, a cache miss
+  // landing on a freshly-redeployed PoP can hit the image-pull
+  // cold-start window (>10 s) where the Worker times out the
+  // container call — without stale-if-error that surfaces as a
+  // user-facing error; with it, the user gets the stale cached
+  // response while the cache transparently retries.
+  completed: "public, max-age=86400, s-maxage=31536000, stale-if-error=86400",
   // In-progress: very short — the page auto-refreshes every
   // minute anyway. 30 s lets back-to-back requests collapse
   // without staling the live game.
@@ -502,7 +531,10 @@ const CACHE_CONTROL = {
   // immediately (~75 ms) and the next request gets the fresh
   // one. Tail latency drops from "spike every 30 s" to
   // "always ~75 ms with eventual consistency."
-  inProgress: "public, max-age=30, s-maxage=30, stale-while-revalidate=60",
+  //
+  // Sub-phase 3B Layer E: `stale-if-error=86400` — see `completed`.
+  inProgress:
+    "public, max-age=30, s-maxage=30, stale-while-revalidate=60, stale-if-error=86400",
   // Pregame: 5 min. Team metadata + matchup percentiles don't shift
   // pre-kickoff but we don't want to outlive the actual kickoff
   // moment (which would silently keep serving "scheduled" past the
@@ -663,7 +695,7 @@ app.get("/cfb/game/:gameId", async (c) => {
   let data: ProcessedGameData;
   try {
     data = await time(c, "python", () =>
-      fetchAndShapePBP(c.env.PYTHON_BASE_URL, gameId, c.env.WORKER_SHARED_SECRET),
+      fetchAndShapePBP(pythonBackend(c.env), gameId),
     );
   } catch (err) {
     console.log(

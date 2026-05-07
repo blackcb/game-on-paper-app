@@ -1,0 +1,80 @@
+# Peak season-mode config: Saturdays in-season (Aug–Jan).
+#
+# Deploy with `wrangler deploy --config wrangler.peak.toml`. See
+# worker/SEASON-MODES.md for when each mode is active and how to
+# swap. This file is a complete config — deploys to the same
+# `sports` Worker as the base wrangler.toml, just with peak-mode
+# fan-out, longer warm window, and both cron-warm layers active.
+#
+# Differences from wrangler.toml:
+#   - SEASON_MODE = "peak"  (containers' sleepAfter = 1h)
+#   - CRON_WARM_ENABLED = "1", PREWARM_TOP_N = "10"
+#   - Python max_instances 5 → 10
+#   - Summary max_instances 3 → 5
+#
+# Everything else (Worker name, KV bindings, container image,
+# instance_type, region constraints, observability, cron schedule)
+# is identical and intentionally duplicated since wrangler does
+# not support inheritance between separate config files.
+
+name = "sports"
+main = "src/index.tsx"
+account_id = "ebe521cb5b561683303b77d32e240ba4"
+compatibility_date = "2026-05-02"
+compatibility_flags = ["nodejs_compat"]
+
+[dev]
+port = 8787
+
+[triggers]
+crons = ["* * * * *"]
+
+[assets]
+directory = "./public"
+
+[[kv_namespaces]]
+binding = "LEAGUE_DATA"
+id = "649602a55c7048c5ba433bdece6ba731"
+
+[[kv_namespaces]]
+binding = "SUMMARY_LAST_UPDATED"
+id = "564be97a4ca8419a9ccdc8b0be0f1c3d"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[vars]
+PYTHON_BASE_URL = "https://python.unseen-university.org"
+SUMMARY_BASE_URL = "https://summary.unseen-university.org"
+PYTHON_BACKEND = "container"
+SUMMARY_BACKEND = "container"
+SEASON_MODE = "peak"
+CRON_WARM_ENABLED = "1"
+PREWARM_TOP_N = "10"
+
+[[containers]]
+class_name = "PythonContainer"
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim"
+max_instances = 10
+instance_type = "standard-2"
+constraints = { regions = ["ENAM", "WNAM"] }
+
+[[containers]]
+class_name = "SummaryContainer"
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-summary:slim"
+max_instances = 5
+instance_type = "standard-2"
+constraints = { regions = ["ENAM", "WNAM"] }
+
+[[durable_objects.bindings]]
+name = "PYTHON_CONTAINER"
+class_name = "PythonContainer"
+
+[[durable_objects.bindings]]
+name = "SUMMARY_CONTAINER"
+class_name = "SummaryContainer"
+
+[[migrations]]
+tag = "v3-containers"
+new_sqlite_classes = ["PythonContainer", "SummaryContainer"]

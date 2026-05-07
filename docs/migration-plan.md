@@ -113,13 +113,18 @@ USER ACTION step without confirmation from the user.**
     other branches unaffected. Live-game validation deferred
     to football season (Aug 20+).
   - vitest suite: 143 assertions across 12 files, ~5.9 s.
-- **Phase 3 — Python on Cloudflare Containers (Tier 3)**: not started
+- **Phase 3 — Python + summary on Cloudflare Containers (Tier 3)**:
+  3A measurement complete; 3A.5 tier decision made (standard);
+  3A.6 image slim is the next concrete task before 3B
 - **Phase 4 — TS + ONNX port (Tier 4, long arc)**: deferred (separate plan)
-- Last updated: 2026-05-08 (2J shipped: stale-while-revalidate=60
-  on in-progress game responses. Per-PoP via caches.default;
-  full live-game validation deferred to Aug 20+. Phase 2 cache-
-  layer work effectively done; Phase 3 Containers is the next
-  meaningful lever)
+- Last updated: 2026-05-08 (Phase 3A measurement + decisions:
+  `instance_type = standard` for both Python and summary;
+  `sleepAfter` is season-driven (peak/normal/offseason profiles);
+  cron-warm Layers B + C and `stale-if-error` Layer E are baked
+  into 3B/3C; 3A.6 image slim queued before 3B starts.
+  Earlier "basic warm 3–5s" claim retracted — reproducible basic
+  is 10–17s warm and never stabilizes; standard hits droplet
+  parity at 3.7–4.8s.)
 
 ### Next session entry point
 
@@ -2216,7 +2221,7 @@ typechecks clean, three placeholder routes (`/` redirect, `/cfb/`,
 
 ---
 
-## Phase 3 — Python on Cloudflare Containers (Tier 3)
+## Phase 3 — Python + summary on Cloudflare Containers (Tier 3)
 
 > **Reordered 2026-05-04**: Phase 3 now sits behind sub-phases
 > 2I (Cache Rules + Origin Cache Control) and 2J (stale-while-
@@ -2228,81 +2233,438 @@ typechecks clean, three placeholder routes (`/` redirect, `/cfb/`,
 > "nice-to-have" (the droplet stays simple, the Worker autoscales
 > for free, Python only runs on actual cache misses).
 >
-> Re-evaluate the case for Phase 3 after instrumenting 2I+2J for
-> 1-2 weeks of real traffic. If the steady-state Python QPS is
-> already low and droplet headroom is comfortable, push Phase 3
-> further out.
+> **Re-evaluated 2026-05-08**: 2I parked (cache rule never engaged
+> on the account); 2J shipped but only smooths the SWR window,
+> doesn't lift the cold-render ceiling. Droplet remains the single
+> point of failure for `/cfb/process` and `/summary/*`. Phase 3
+> is back to "must-do" before football season — proceeding now.
+>
+> **Scope decision (2026-05-08)**: bundle the `summary` container
+> alongside Python. Today's replica fronts both via Caddy on the
+> droplet; if we move only Python, the droplet still has to stay
+> alive for summaries, which kills the "one bill / no SSH"
+> outcome. Two CF Containers for marginal extra work.
+>
+> **Registry decision (2026-05-08)**: use Cloudflare's managed
+> registry (`registry.cloudflare.com/<account-id>/<image>:<tag>`)
+> for both images. `wrangler containers push` handles auth from
+> the local Wrangler config — no GHCR public-visibility dance and
+> no dashboard creds setup. Image storage counts toward the
+> Containers plan.
 
-**Outcome**: Python `/cfb/process` runs as a Cloudflare Container bound to
-the Worker. Droplet decommissioned. Both Redis containers gone (replaced by
-KV/Cache API in Phase 2). One bill.
+**Outcome**: Python `/cfb/process` and the cfb-team-summaries service both
+run as Cloudflare Containers bound to the Worker. Droplet decommissioned.
+Both Redis containers gone (replaced by KV/Cache API in Phase 2). One bill.
 
 **Estimate**: 1–2 weeks.
 
 **Rollback**: Keep the droplet running until end of phase. The Worker can
-be flipped back to calling the droplet's Python URL via a single env var
-edit and `wrangler deploy`.
+be flipped back to calling the droplet via a single env var edit and
+`wrangler deploy`.
 
 ### Sub-phases
 
-#### 3A — Image audit
+#### 3A — Image audit + cold-start measurement
 
-- ☐ Confirm Cloudflare Containers is available on the account
+- ☑ Confirm Cloudflare Containers is available on the account
   (Workers Paid plan required, plus Containers eligibility — check
-  dashboard or `wrangler containers list`).
-  > **USER ACTION**: Confirm Containers access. Pricing is per-second
-  > active CPU; idle is cheap. Estimate based on current Python service
-  > traffic.
-- ☐ Audit the Python image: ensure gunicorn is in (Phase 1). Verify the
-  image runs on `linux/amd64` (Cloudflare Containers requirement). Test
-  with `docker run --platform linux/amd64 ghcr.io/.../game-on-paper-python`.
+  dashboard or `wrangler containers push`). **Confirmed 2026-05-08**:
+  account shows the "Containers" tab; `wrangler containers push`
+  succeeded.
+- ☑ Audit the Python image: gunicorn already in (Phase 1). Verify the
+  image runs on `linux/amd64`. **Confirmed 2026-05-08**: existing
+  `python/Dockerfile` builds a single-arch linux/amd64 image
+  (~1.32 GB).
+- ☑ Audit + slim the summary image. **Done 2026-05-08.** Upstream
+  `ghcr.io/akeaswaran/akeaswaran/cfb-team-summaries:latest` is
+  **3.62 GB** — uses `node:lts` (buildpack-deps), 618 MB of dev
+  libs (libmagickwand, libmysql, libpostgres) + 191 MB git/svn +
+  132 MB debian base before any app code. Repackaged on
+  `node:24-slim`:
+  - Vendored Node source from `github.com/akeaswaran/cfb-team-summaries`
+    into `summary/server/`.
+  - Extracted CSV data (years 2014–2024, ~58 MB) from upstream
+    `:latest` into `summary/data/` — historical data, doesn't
+    change. Refresh procedure documented in `summary/Dockerfile`.
+  - Skipped the upstream R stage entirely (would need a CFBD API
+    key; data is essentially static).
+  - TypeScript pinned to `^5.4` in build stage; newer TS requires
+    explicit `rootDir` in tsconfig, which would force editing
+    upstream config.
+  - Result: **3.62 GB → 94.6 MB (97% reduction)**.
+  - Parity verified: `/percentiles/2023` returns identical
+    86,711-byte body; `/health` and POST `/` match byte-for-byte.
+  - Pushed as `registry.cloudflare.com/<account-id>/gop-summary:slim`.
 - ☐ Add a `/healthcheck` Server-Timing assertion: it should be <50ms
-  (cold start excluded). If it isn't, the container init is doing too
-  much — investigate before deploying.
-- ☐ Push the image to a registry Cloudflare can pull from. Options:
-  - GitHub Container Registry (GHCR) with public visibility.
-  - Cloudflare's own registry (preferred — no auth dance for Workers).
-  > **USER ACTION**: Choose registry strategy. If sticking with GHCR,
-  > make sure the image is public or set up registry creds in Cloudflare
-  > dashboard.
+  (cold start excluded). Container `/healthcheck` warm currently
+  measures ~34ms — passes — but capture proper Server-Timing in 3B.
+- ☑ Push the Python image to Cloudflare's managed registry.
+  **Done 2026-05-08**: `gop-python:test` lives at
+  `registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/`. First
+  attempt 408-timed-out; second attempt 201 Created.
+- ☑ Spin up a throwaway Worker with a Container binding and measure
+  cold-start cost (full image-pull, idle-resume, warm). **See 3A.4
+  results below.**
+- ☑ **3A.5**: Findings + tier decision captured below.
+- ☑ **3A.6**: Slim the Python image. **Done 2026-05-08.**
+  `python/Dockerfile` rewritten as proper multi-stage: builder stage
+  installs into `/opt/venv`, runtime stage is `python:3.14-slim`
+  with the venv copied in. Three structural wins:
+  1. Base image `python:3.14` (~1 GB) → `python:3.14-slim` (~120 MB).
+  2. `xgboost` (~330 MB GPU build) + transitive `nvidia-nccl-cu12`
+     (~300 MB) replaced with `xgboost-cpu` (~14 MB). sportsdataverse
+     pins `xgboost` directly so we install both, then uninstall the
+     GPU package and force-reinstall xgboost-cpu to repopulate the
+     `xgboost/` Python module files. Snapshot tests confirm CPU-only
+     predictions match GPU build at 1e-5 tolerance (zero diffs on
+     gameId 401520434, identical 2,012,597-byte body).
+  3. Dropped `tests/` and `__pycache__` from installed packages,
+     `--no-cache-dir` for pip, isolated venv (no `/usr/local`
+     clutter from build base), `.dockerignore` for source.
+  Result: **1.32 GB → 210 MB (84% reduction)**, well under the
+  600 MB target.
+
+##### 3A.4 measurement results (2026-05-08)
+
+Test Worker: `gop-coldstart-test.unseen-university.workers.dev`
+(see `worker-coldstart/` — delete after 3B is wired up). Image
+`gop-python:test`, 1.32 GB. `max_instances` 1–2, `sleepAfter = "60s"`.
+
+| Configuration | First call after deploy | Warm steady state | Cold-after-idle |
+|---|---|---|---|
+| Basic (1/4 vCPU, 1 GiB) | 11–15s | **10–17s — never stabilized** | 8–10s |
+| Standard (1/2 vCPU, 4 GiB) | 7.8–12s for ~50s | **3.7–4.8s** | 15s |
+
+Droplet warm `/cfb/process` for comparison: ~4s. **Standard is
+roughly droplet parity for warm; basic is unusable** at current
+image size.
+
+Earlier "basic warm 3–5s" measurements (captured before tier-
+switching) appear to have come from a container with extended
+uptime where Python state and OS page cache were deeply warm.
+Reproducible warm-on-fresh-basic right now is 10–17s and does not
+recover within 30 sequential calls.
+
+CF dashboard disk-usage graph during the test session shows clear
+dips to ~0 GB at every restart (deploy, instance-type change,
+1101-error event), then climbs back to 3.22 GB resident. This
+**confirms `sleepAfter` = full container stop/restart** (not
+process pause) — every idle-resume re-pages the 1.32 GB image and
+re-runs Python's lazy imports. That's the warmup tail.
+
+Anomalies seen during the basic→standard churn:
+- `1101` Worker exceptions on a couple of runs, attributed to the
+  container being torn down between instance_type changes.
+- gameIds `401403910` / `401411157` returned 500/65b on first call
+  during a churn event, then 200/2 MB on retry. Re-validate in 3C.
+
+##### 3A.5 — decision (2026-05-08, updated)
+
+Original recommendation was "ship basic with `sleepAfter = "10m"`,
+no cron-warm." That was based on the now-suspect 3–5s basic
+measurement. With corrected data:
+
+1. **Tier**: ship `instance_type = "standard"` for both Python and
+   summary. Basic at 1/4 vCPU is too thin to overcome image-paging
+   on a 1.32 GB image; warm never stabilizes. Standard hits
+   droplet-parity warm steady state.
+2. **`sleepAfter`**: season-driven. Off-season "10m"; peak gameday
+   "30m" or "1h" so a popular regional instance stays warm through
+   the day.
+3. **Cron-warm**: yes, during football season — both a regional
+   `/healthcheck` warm (Layer B) and a top-N game pre-warm
+   (Layer C). See 3C.
+4. **Cache `stale-if-error`** (Layer E): yes, baked into 3B's
+   Cache-Control header so a slow/failed container falls back to
+   last-cached payload.
+5. **Image slim** (3A.6): top of 3B's prerequisite list. Likely
+   the highest-leverage single fix — attacks the warmup tail
+   directly. Re-measure both basic and standard post-slim before
+   committing the tier choice.
+
+Cost estimation deferred until 3C/3D have ~2 weekends of real
+data. Pricing structure: active-CPU per 10ms, memory per
+GiB-second-while-running, idle-stopped ≈ $0. `max_instances` is a
+*cap*, not a baseline — set generously, only pay for actual
+activity. Specific dollar rates: confirm in
+`dash.cloudflare.com` → Plans → Containers and record here.
+
+##### 3A.6 post-slim re-measurement (2026-05-08)
+
+Same test Worker, image bumped to `gop-python:slim` (210 MB).
+
+| Configuration | Image-pull | First call after deploy | Steady warm | Cold-after-idle | Idle recovery |
+|---|---|---|---|---|---|
+| Basic + slim | ~10s (was >30s) | 11–14s | **9–26s + 1101 storms — still unusable** | n/a | n/a |
+| Standard + slim | <1s warm-after-pull | 15–23s with 1101s | **5.9–6.5s** | 18.8s | **1 call to recover** (vs 30+ pre-slim) |
+
+Two clear wins from slimming:
+
+1. **Image-pull collapsed**: >30s → ~10s on first deploy, sub-second
+   warm. That's the once-per-region-per-deploy path; matters for
+   redeploy frequency tolerance.
+2. **Recovery from cold collapsed**: previously 30+ calls of
+   degraded 8–17s performance before the container settled into
+   steady state. Now: 1 cold call at 18s, second call already at
+   5.9s. The "long warmup tail" hypothesis (image pages not yet
+   in OS cache) is supported.
+
+One regression / unknown:
+- Standard steady-state warm came in at **5.9–6.5s**, vs this
+  morning's **3.7–4.8s** on the heavier image. Same instance type,
+  same gameId. Most likely temporal/regional load on CF's
+  Containers infrastructure (we saw 1101 error storms during
+  warmup in both this afternoon's basic and standard runs but not
+  this morning's). Re-measure tomorrow at a different hour to
+  characterize. If 5.9–6.5s holds, that's still droplet-comparable
+  but not the parity we hoped for.
+
+Basic remains unusable — image size wasn't the bottleneck there;
+1/4 vCPU genuinely can't sustain the pipeline. Stick with the 3A.5
+decision: ship standard.
+
+The 1101 error storms during warmup are the biggest open concern
+for 3B/3C. If they happen on every container restart, real users
+will see them on cache misses to a recently-idle PoP. Investigate
+during 3C with `wrangler tail` capturing a real cold-start event,
+and consider whether a Worker-side retry-on-1101 + Cache API
+`stale-if-error` (Layer E) closes the gap.
+
+##### 3A.7 region pinning + larger tier (2026-05-08)
+
+CF dashboard showed our test container running in **Lisbon,
+Portugal** — adding cross-Atlantic round-trip on every container
+hop. Two updates tested together:
+
+- **Region pinning** via `constraints = { regions = ["ENAM", "WNAM"] }`
+  in `wrangler.toml`. Valid regions: ENAM, WNAM, EEUR, WEUR, APAC,
+  SAM, ME, OC, AFR. Pinning to both US regions lets the scheduler
+  pick the closer of the two and prevents Atlantic-crossing
+  placements regardless of where the first request originates.
+- **Tier bump** to `instance_type = "standard-2"`. Wrangler's
+  current `ALLOWED_INSTANCE_TYPES` is
+  `[lite, basic, standard-1, standard-2, standard-3, standard-4,
+  dev (legacy), standard (legacy alias for standard-1)]`. We were
+  on legacy `standard` = standard-1 (~1/2 vCPU). standard-2 is
+  the next step up; full vCPU/memory specs visible in the
+  dashboard once deployed.
+
+| Scenario | standard-2 + slim + ENAM/WNAM |
+|---|---|
+| Image-pull / first deploy | ~12s |
+| Warmup window | 7–8s for 5 calls, brief 1101 storm, then converges |
+| **Warm steady state** | **1.9–2.3s** |
+| Cold-after-idle (sleepAfter=60s) | 14s on first call |
+| **Recovery from cold** | **1 call back to 2.3s** |
+
+Comparison points: droplet warm ≈ 4s; standard-1 + slim was
+5.9–6.5s; basic at any image size was unusable. **Standard-2 + slim
++ region-pinned is faster than the droplet by ~2× in steady state**
+and recovers from cold in a single call.
+
+Updated 3A.5 / 3B decisions:
+1. **`instance_type = "standard-2"`** for both Python and summary
+   containers in production.
+2. **`constraints = { regions = ["ENAM", "WNAM"] }`** on every
+   `[[containers]]` block. Add to all three season profiles.
+3. Cost trade: standard-2 is more expensive per active CPU-second
+   than standard-1, but billed only on cache misses + cron-warm.
+   Re-confirm rates and budget once 3D has 2 weekends of real
+   activity.
+
+Open question: try standard-3 / standard-4 to see if there's
+further headroom, or accept 2.1s. Recommend accept — pandas pipeline
+is largely single-threaded, and we're already past droplet parity.
+If we ever want sub-second for live games, the answer is Phase 4
+(ONNX port), not bigger containers.
 
 #### 3B — Container binding
 
-- ☐ Add to `wrangler.toml`:
+> **Prerequisite**: 3A.6 image slim must be done first. Tier
+> decision and final `sleepAfter` get re-confirmed against the
+> slim image's measurements before this phase ships.
+
+- ☐ Add to `wrangler.toml` (production profile):
   ```toml
   [[containers]]
-  name = "PBP_PROCESSOR"
-  image = "ghcr.io/saiemgilani/saiemgilani/game-on-paper-python:latest"
-  instance_type = "basic"  # adjust based on memory needs
+  class_name = "PythonContainer"
+  image = "registry.cloudflare.com/<account-id>/gop-python:slim"
+  instance_type = "standard-2"   # see 3A.7 — 2× droplet warm
+  max_instances = 10             # peak Saturday cap
+  constraints = { regions = ["ENAM", "WNAM"] }
+
+  [[containers]]
+  class_name = "SummaryContainer"
+  image = "registry.cloudflare.com/<account-id>/gop-summary:slim"
+  instance_type = "standard-2"
   max_instances = 5
+  constraints = { regions = ["ENAM", "WNAM"] }
+
+  [[durable_objects.bindings]]
+  name = "PYTHON_CONTAINER"
+  class_name = "PythonContainer"
+
+  [[durable_objects.bindings]]
+  name = "SUMMARY_CONTAINER"
+  class_name = "SummaryContainer"
+
+  [[migrations]]
+  tag = "v3-containers"
+  new_sqlite_classes = ["PythonContainer", "SummaryContainer"]
   ```
+- ☐ Define both DO subclasses in `worker/src/containers.ts`:
+  `Container<Env>` from `@cloudflare/containers`, `defaultPort` set
+  per service (Python 7000, summary 3000). `sleepAfter` driven by
+  `env.SEASON_MODE`:
+  - `peak` (Saturdays in-season): `"1h"`
+  - `normal` (weekdays in-season): `"10m"`
+  - `offseason` (Feb–Jul): `"5m"`, plus drop `max_instances` to 2.
+- ☑ Season-mode profiles + 3B core wiring activated. **Done
+  2026-05-08.** Initial plan was wrangler environments
+  (`[env.peak]`, etc.); discovery during dry-run was that wrangler
+  environments produce *separate Workers* (`sports-peak`,
+  `sports-normal`), not different configs of the same Worker —
+  unusable for our seasonal-flip model. Pivoted to three separate
+  config files:
+  - [worker/wrangler.toml](../worker/wrangler.toml) — normal-mode
+    weekday-in-season config; bare `wrangler deploy` target.
+  - [worker/wrangler.peak.toml](../worker/wrangler.peak.toml) —
+    Saturday gameday: max_instances 10/5, sleepAfter 1h,
+    Layer B+C cron-warm enabled.
+  - [worker/wrangler.offseason.toml](../worker/wrangler.offseason.toml)
+    — Feb–Jul: max_instances 2/2, sleepAfter 5m, no cron-warm.
+
+  Swap procedure documented in
+  [worker/SEASON-MODES.md](../worker/SEASON-MODES.md):
+  `wrangler deploy --config wrangler.<mode>.toml`.
+
+  Other 3B core-wiring deltas, all shipped together:
+  - [worker/src/containers.ts](../worker/src/containers.ts) —
+    `PythonContainer` and `SummaryContainer` DO subclasses,
+    `sleepAfter` resolved from `env.SEASON_MODE` at construction.
+  - [worker/src/lib/backends.ts](../worker/src/lib/backends.ts) —
+    new `BackendFetch` abstraction. `pythonBackend(env)` and
+    `summaryBackend(env)` route through `getContainer().fetch(...)`
+    when `*_BACKEND === "container"`, otherwise through the
+    existing `dropletFetch(base, secret)` path. Toggle defaults to
+    `droplet` in the base wrangler.toml (3D flip is a single env
+    var change).
+  - `lib/games.ts` `fetchAndShapePBP` and `lib/summary.ts`
+    `SummaryConfig` refactored to take a `BackendFetch` instead of
+    raw base+secret.
+  - `src/index.tsx` exports `PythonContainer` / `SummaryContainer`
+    so wrangler's DO migration can find them; uses `pythonBackend`
+    / `summaryBackend` when building per-request configs.
+  - Container bindings, `[[durable_objects.bindings]]`, and
+    `[[migrations]]` blocks added across all three config files.
+  - Tests updated: `dropletFetch(...)` from the production code is
+    used directly to build test-side `SummaryConfig` and to pass
+    into `fetchAndShapePBP`, so existing `globalThis.fetch` mocks
+    keep working unchanged. **vitest: 145/145 passing.**
+  - All three configs validated with `wrangler deploy --dry-run`.
+
+  Production behavior on a bare `wrangler deploy` of the new base
+  config is unchanged from pre-3B: `PYTHON_BACKEND=droplet` and
+  `SUMMARY_BACKEND=droplet` route every request through the same
+  HTTPS-to-Caddy path. The container DO classes are *defined* and
+  the bindings *exist* in production after this deploy, but no
+  request flows through them until a config flip.
 - ☐ Update the Worker's PBP fetch path: replace
   `fetch(env.PYTHON_BASE_URL + '/cfb/process', ...)` with
-  `env.PBP_PROCESSOR.fetch('http://container/cfb/process', ...)`.
+  `getContainer(env.PYTHON_CONTAINER).fetch('http://container/cfb/process', ...)`.
+- ☐ Update summary fetch paths similarly (leaderboards / players /
+  trends / EPA chart / team pages / pregame matchup all currently
+  hit the Caddy `127.0.0.1:3000` bridge).
+- ☑ **Layer E — `stale-if-error`** in Cache-Control headers for
+  game-page responses. **Done 2026-05-08.** Updated
+  `worker/src/index.tsx` `CACHE_CONTROL`:
+  ```ts
+  completed:  "public, max-age=86400, s-maxage=31536000, stale-if-error=86400",
+  inProgress: "public, max-age=30, s-maxage=30, stale-while-revalidate=60, stale-if-error=86400",
+  ```
+  Existing TTLs preserved (the migration-plan sketch suggested
+  shorter values for "final" but those were placeholders — the
+  current `completed` posture is intentional for terminal data).
+  `pregame`, `quarantine`, and `errorNoStore` left alone:
+  - `pregame` could benefit from this too once 3B switches its
+    summary-container path to a Container binding — defer.
+  - `quarantine` is from internal Worker data, no container call.
+  - `errorNoStore` must NEVER cache.
+
+  Tests in `worker/test/game.test.ts` updated for both `completed`
+  and `inProgress` (and the `?json=1` variant which uses the
+  completed posture). vitest: 145/145 passing.
 - ☐ Add an env-controlled toggle so traffic can be split: e.g.,
-  `PYTHON_BACKEND=container|droplet`. Lets you A/B during cutover.
+  `PYTHON_BACKEND=container|droplet`, `SUMMARY_BACKEND=container|droplet`.
+  Lets you A/B during cutover and roll back per-service.
 
-#### 3C — Parallel deploy
+#### 3C — Parallel deploy + cron-warm layers
 
-- ☐ Deploy Worker with `PYTHON_BACKEND=container` to a preview environment.
+- ☐ Deploy Worker with `PYTHON_BACKEND=container` and
+  `SUMMARY_BACKEND=container` to a preview environment.
 - ☐ Run the full Playwright suite against the preview. Particular attention
-  to: cold start latency, in-progress game refresh, and the OT/quarantine
-  fixtures from perf-plan Day 2.
+  to: cold start latency, in-progress game refresh, summary-backed
+  pages (leaderboards / players / trends / EPA / team / pregame),
+  and the OT/quarantine fixtures from perf-plan Day 2.
 - ☐ Compare snapshot test outputs (perf-plan Day 2) between droplet Python
   and container Python — should be identical (same image).
-- ☐ If using `instance_type = "basic"`, monitor memory: pandas pipelines
-  routinely peak above 1GB. Bump to `standard` if OOMs occur.
+- ☐ Monitor memory: pandas pipelines peak above 1 GB on dense
+  games. Standard's 4 GiB has headroom but verify on the
+  OT/quarantine fixtures specifically.
+
+##### Cold-start mitigation layers
+
+The container's idle-resume cold-start is real (8–15s). Layer A
+(Cache + `stale-while-revalidate`, shipped in 2D/2J) and Layer E
+(`stale-if-error`, added in 3B) hide it for repeat traffic. B
+and C below close the remaining gaps.
+
+- ☐ **Layer B — gameday-window healthcheck cron**. Workers Cron
+  Trigger that hits `/healthcheck` on the container DO every
+  ~2 minutes during football season game hours
+  (Sat 11:00–23:00 ET, plus Tue/Wed/Thu/Fri evenings if there are
+  scheduled games). Keeps the regional instance from sleeping.
+  - Cron schedule (Workers Cron uses UTC): start with
+    `*/2 15-3 * 9-12 6` (Sat 15:00 UTC – Sun 03:00 UTC, ~Sept–Dec).
+    Refine after the first season.
+  - Cost: ~360 calls × 30 ms warm = ~11 active CPU-seconds per
+    Saturday. Negligible.
+  - Kill-switch: a `CRON_WARM_ENABLED` env binding so we can
+    disable without redeploy.
+- ☐ **Layer C — top-N game pre-warm cron**. Same Cron Trigger
+  (or a second one), runs every 2–3 minutes during gameday game
+  hours. Calls `/cfb/process` for the top-N games scheduled
+  *today* (read from a daily-refreshed KV entry populated by an
+  early-morning cron from the schedule API). Populates Cache API
+  before users arrive.
+  - N = 8–10. Tunable.
+  - Cost (estimate): 10 games × 5s active CPU × 30 cron runs /
+    Saturday = ~25 active CPU-minutes per Saturday. Modest.
+  - Implementation: `worker/src/cron.ts` exports a `scheduled`
+    handler; selects games via the `GAMES_TODAY` KV entry; uses
+    `caches.default.put(...)` to seed the cache directly so the
+    user's request is a hit rather than just a warm container.
+  - Kill-switch: same `CRON_WARM_ENABLED` env binding gates both B
+    and C. Layer C also has a `PREWARM_TOP_N=0` knob to disable
+    just C and keep B.
+- ☐ Verify Layer A + B + C + E together by running a synthetic
+  load test against the preview — simulate gameday traffic
+  patterns (mix of cache hits, in-progress refreshes, top-N
+  pre-warmed games, occasional miss on a long-tail game). Capture
+  p50/p95 of user-facing latency.
 
 #### 3D — Production cutover
 
-- ☐ Set `PYTHON_BACKEND=container` in production.
+- ☐ Set `PYTHON_BACKEND=container` and `SUMMARY_BACKEND=container` in
+  production. Cut the two services independently if possible (Python
+  first — bigger blast radius if it fails — then summary the next day).
 - ☐ Deploy: `wrangler deploy --env production`.
   > **DESTRUCTIVE STEP**: confirm with user. Have rollback ready
-  > (`PYTHON_BACKEND=droplet` + redeploy, ~60s).
-- ☐ Monitor for 48h: error rate, p50/p95 of `/cfb/process` calls (visible
-  in Server-Timing logs and Workers Analytics), container instance count,
-  memory usage.
-- ☐ Once stable, remove the toggle and the droplet URL config.
+  > (`*_BACKEND=droplet` + redeploy, ~60s).
+- ☐ Monitor for 48h: error rate, p50/p95 of `/cfb/process` and
+  `/summary/*` calls (Server-Timing logs + Workers Analytics),
+  container instance count, memory usage.
+- ☐ Once stable, remove the toggles and the droplet URL config.
 
 #### 3E — Decommission droplet + Redis containers
 
@@ -2328,19 +2690,49 @@ edit and `wrangler deploy`.
 
 ### Acceptance
 
-- Production traffic served entirely by Worker + Container; no droplet
+- Production traffic served entirely by Worker + Containers; no droplet
   involvement.
 - p95 latency on `/cfb/game/:id` cache miss is comparable to or better
-  than droplet-era numbers.
+  than droplet-era numbers (target: ≤ 6s post-slim).
+- p95 user-facing latency during a typical gameday Saturday (mix of
+  hits, SWR background refreshes, occasional miss): ≤ 1s. Cold-start
+  events should be invisible to users thanks to Layers A + B + C + E.
 - Lighthouse perf score on game page is ≥90.
-- Single deploy command (`wrangler deploy`) replaces SSH + docker compose.
-- Total monthly bill is lower than droplet-era.
+- Single deploy command (`wrangler deploy --config wrangler.<mode>.toml`)
+  replaces SSH + docker compose.
+- Total monthly bill is lower than droplet-era, including in-season
+  cron-warm overhead.
 
 ### Notes
 
-_(fill in as you go: instance_type chosen, max_instances, registry chosen,
-cutover timeline, post-cutover metrics, decommission date, anything that
-broke during container migration)_
+- **Registry chosen (2026-05-08)**: Cloudflare's managed registry,
+  `registry.cloudflare.com/<account-id>/<image>:<tag>`. `wrangler
+  containers push` handles auth from local Wrangler config. Avoids
+  GHCR public-visibility dance + dashboard creds setup.
+- **Scope expanded (2026-05-08)**: `summary` container is now in
+  Phase 3 alongside Python. If we ship only Python, the droplet has
+  to stay alive for `cfb-team-summaries` (used by leaderboards,
+  players, trends, EPA, team, pregame). Two CF Containers vs.
+  half-decommissioning the droplet.
+- **Phase 3A.4 cold-start data (2026-05-08)** — captured via the
+  throwaway `worker-coldstart/` Worker against `gop-python:test`:
+  - First-deploy / image-pull (1.32 GB image to a new PoP): >30s
+    (curl `--max-time 30` timed out). One-time cost per PoP per
+    deploy. Avoid redeploying mid-game.
+  - Cold-after-idle (sleepAfter=60s expired): healthcheck 7–9s,
+    `/cfb/process` 8–10s.
+  - Warm: healthcheck ~34ms, `/cfb/process` 3–5s (one outlier 7.4s,
+    likely a second instance booting).
+  - Droplet warm `/cfb/process` for comparison: ~4s. Steady-state
+    latency is parity; cold-after-idle premium ~5–6s.
+  - Anomaly: gameIds `401403910` and `401411157` returned 500/65b
+    on first hit, then 200/2 MB on retry. Transient; flag for 3C.
+- **Recommendation (2026-05-08)** for 3A.5: ship with
+  `sleepAfter = "10m"`, no cron-warm. Add cron-warm only if
+  Workers Logs show >5% cold-start during football season.
+- _(fill in as you go: instance_type chosen, max_instances, cutover
+  timeline, post-cutover metrics, decommission date, anything that
+  broke during container migration)_
 
 ---
 
@@ -2371,6 +2763,27 @@ Until that plan is built, leave Phase 4 deferred and revisit annually.
 
 ---
 
+## Future backlog
+
+Items not on the migration critical path but worth tracking so they
+don't get lost. Promote to a phase when one becomes urgent.
+
+- **Take ownership of the summary data pipeline (CFBD API key)** —
+  3A.6b shipped option (A): mirror upstream `cfb-team-summaries`
+  weekly via GH Action, extract data, rebuild slim image. That
+  keeps us dependent on upstream's release cadence (which may or
+  may not stay weekly during football season). Option (B) — the
+  long-term path — is to register for a CollegeFootballData API
+  key at <https://collegefootballdata.com/>, vendor or rewrite
+  `team_agg.R`, and run the data refresh ourselves on whatever
+  schedule we want. Decouples us from upstream entirely. Touch
+  this when (a) upstream's refresh cadence becomes a problem, or
+  (b) we want to compute stats that aren't in upstream's set, or
+  (c) we're ready to retire the dependency on `akeaswaran/cfb-team-summaries`
+  altogether.
+
+---
+
 ## Glossary of decisions deferred to Notes
 
 These show up across multiple phases and need to be documented as soon as
@@ -2380,5 +2793,9 @@ they're made:
 - **Cloudflare API token name + permissions used** (Phase 2).
 - **Hono vs alternatives for Workers framework** (Phase 2A).
 - **Workers Static Assets vs Pages for static files** (Phase 2E).
-- **Container instance_type and max_instances chosen** (Phase 3B).
-- **Registry used for the Python image** (Phase 3A).
+- ~~**Container instance_type and max_instances chosen**
+  (Phase 3B)~~ — decided 2026-05-08: `standard-2`, `max_instances=10`
+  (Python) / 5 (summary), `constraints.regions=["ENAM","WNAM"]`.
+  See Phase 3 Notes (3A.7).
+- ~~**Registry used for the Python image** (Phase 3A)~~ — decided
+  2026-05-08: Cloudflare's managed registry. See Phase 3 Notes.

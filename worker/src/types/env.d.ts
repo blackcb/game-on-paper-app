@@ -11,6 +11,19 @@ declare namespace Cloudflare {
   interface Env {
     LEAGUE_DATA: KVNamespace;
     SUMMARY_LAST_UPDATED: KVNamespace;
+    // Container DO bindings (3B). Optional so test envs that don't
+    // configure containers still type-check; lib/backends.ts gates
+    // the container codepath on the backend toggle anyway.
+    PYTHON_CONTAINER?: DurableObjectNamespace;
+    SUMMARY_CONTAINER?: DurableObjectNamespace;
+    PYTHON_BACKEND?: string;
+    SUMMARY_BACKEND?: string;
+    SEASON_MODE?: string;
+    CRON_WARM_ENABLED?: string;
+    PREWARM_TOP_N?: string;
+    PYTHON_BASE_URL: string;
+    SUMMARY_BASE_URL: string;
+    WORKER_SHARED_SECRET?: string;
   }
 }
 

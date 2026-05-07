@@ -13,6 +13,7 @@
 // takes a SummaryConfig (kv + base URL + secret) so the URL is
 // passed in by the route handler from c.env rather than hardcoded.
 
+import type { BackendFetch } from "./backends";
 import { MIN_SEASON } from "./season";
 
 // Three-day TTL on summary data — matches frontend/cfb/routes.js's
@@ -25,15 +26,18 @@ const TTL_SECONDS = 60 * 60 * 24 * 3;
 // saturated the summary container.
 const REMOTE_YEAR_RETRY_BUDGET = 2;
 
-// Bundles everything the retrieve* helpers need: the KV namespace
-// holding the cached results, the public summary base URL, and the
-// shared secret to prove the request originated from the Worker.
-// Built once per request by the route handler from c.env (see
-// summaryCfg() / lastUpdatedCfg() in index.tsx).
+// Bundles what the retrieve* helpers need: the KV namespace holding
+// cached results, and a `BackendFetch` that abstracts the transport
+// (HTTPS-to-droplet vs. Cloudflare Container DO binding). Built once
+// per request by the route handler from c.env via summaryCfg() /
+// lastUpdatedCfg() in index.tsx.
+//
+// Pre-3B: `base` and `secret` fields here drove a direct fetch to
+// the public Caddy hostname with X-Worker-Secret stamping. Both
+// concerns now live behind `fetch` (see lib/backends.ts).
 export interface SummaryConfig {
   kv: KVNamespace;
-  base: string;
-  secret?: string | null;
+  fetch: BackendFetch;
 }
 
 export interface TeamLeagueRow {
@@ -55,20 +59,14 @@ interface LastUpdatedResponse {
   last_updated: string;
 }
 
-function authHeaders(secret: string | null | undefined, extra: Record<string, string> = {}): Record<string, string> {
-  const headers: Record<string, string> = { ...extra };
-  if (secret) headers["X-Worker-Secret"] = secret;
-  return headers;
-}
-
 async function postSummaryForm(
   cfg: SummaryConfig,
   payload: Record<string, string>,
 ): Promise<TeamLeagueRow[]> {
   const body = new URLSearchParams(payload);
-  const response = await fetch(`${cfg.base}/`, {
+  const response = await cfg.fetch("/", {
     method: "POST",
-    headers: authHeaders(cfg.secret, { "Content-Type": "application/x-www-form-urlencoded" }),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
   if (!response.ok) {
@@ -145,9 +143,7 @@ async function fetchRemotePercentiles(
   const params = new URLSearchParams();
   if (year != null) params.set("year", String(year));
   if (pctile != null) params.set("pctile", String(pctile));
-  const response = await fetch(`${cfg.base}/percentiles?${params}`, {
-    headers: authHeaders(cfg.secret),
-  });
+  const response = await cfg.fetch(`/percentiles?${params}`);
   if (!response.ok) {
     throw new Error(`summary /percentiles returned ${response.status}`);
   }
@@ -269,9 +265,7 @@ export async function retrieveTeamData(
 }
 
 async function fetchRemoteLastUpdated(cfg: SummaryConfig): Promise<string | null> {
-  const response = await fetch(`${cfg.base}/updated`, {
-    headers: authHeaders(cfg.secret),
-  });
+  const response = await cfg.fetch("/updated");
   if (!response.ok) return null;
   const content = (await response.json()) as LastUpdatedResponse;
   await cfg.kv.put("summary-last-updated", JSON.stringify(content), {
