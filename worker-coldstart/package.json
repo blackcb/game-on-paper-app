@@ -1,0 +1,16 @@
+{
+  "name": "gop-coldstart-test",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Throwaway Worker for measuring Phase 3A cold-start latency. Delete after the measurement is captured.",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "@cloudflare/containers": "^0.3.3",
+    "@cloudflare/workers-types": "^4.20260507.1",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.87.0"
+  }
+}
