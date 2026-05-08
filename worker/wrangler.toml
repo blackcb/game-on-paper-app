@@ -105,20 +105,19 @@ PYTHON_BASE_URL = "https://python.unseen-university.org"
 # the same X-Worker-Secret gate.
 SUMMARY_BASE_URL = "https://summary.unseen-university.org"
 # Sub-phase 3B backend toggle. lib/backends.ts reads these to pick
-# the per-request transport. Defaulting to "droplet" preserves
-# pre-3B behavior on every deploy of this base file; flip to
-# "container" at the 3D cutover. See worker/SEASON-MODES.md.
-PYTHON_BACKEND = "droplet"
-SUMMARY_BACKEND = "droplet"
+# the per-request transport. Cut over from "droplet" to "container"
+# in 3D (2026-05-08). See worker/SEASON-MODES.md.
+PYTHON_BACKEND = "container"
+SUMMARY_BACKEND = "container"
 # 3B sleepAfter driver (read by Container subclass in src/containers.ts).
 # This file is the "normal" weekday-in-season profile.
 SEASON_MODE = "normal"
 # 3C cron-warm gates (Layers B + C). `normal` keeps Layer B
 # (healthcheck warm) on, Layer C (per-game pre-warm) off — Wednesday
 # nights have one MAC midweek game, pre-warming 10 of them is waste.
-# Both gates remain "0" until the cron handlers ship; flip to "1" /
-# "8-10" at that point.
-CRON_WARM_ENABLED = "0"
+# Bumped to "1" alongside the 3D cutover so weekday-deployed-on-Sat
+# fallback works without a separate flip.
+CRON_WARM_ENABLED = "1"
 PREWARM_TOP_N = "0"
 # Layer C self-fetch target. The Worker is bound to this hostname via
 # Cloudflare Routes; cron-fired prewarms hit it from inside the

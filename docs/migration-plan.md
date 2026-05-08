@@ -2862,16 +2862,152 @@ and C below close the remaining gaps.
 
 #### 3D — Production cutover
 
-- ☐ Set `PYTHON_BACKEND=container` and `SUMMARY_BACKEND=container` in
-  production. Cut the two services independently if possible (Python
-  first — bigger blast radius if it fails — then summary the next day).
-- ☐ Deploy: `wrangler deploy --env production`.
-  > **DESTRUCTIVE STEP**: confirm with user. Have rollback ready
-  > (`*_BACKEND=droplet` + redeploy, ~60s).
-- ☐ Monitor for 48h: error rate, p50/p95 of `/cfb/process` and
-  `/summary/*` calls (Server-Timing logs + Workers Analytics),
-  container instance count, memory usage.
-- ☐ Once stable, remove the toggles and the droplet URL config.
+> **Plan revised 2026-05-08** based on what 3C validated. Prior
+> revision in this section called for staggered Python-then-summary
+> over two days, an extensive pre-flight, and 48h burn-in framing
+> that assumed cold-start might be catastrophic. After 3A's slim-
+> image work, 3B's container wiring, and 3C's E2E + perf + stress
+> tests, the cutover is much smaller in scope and risk:
+>
+> - **Failure parity confirmed** with droplet (#79) — same gameIds
+>   fail both paths, no migration regressions.
+> - **Worst case is slow page load (~14 s), not error** (#79) —
+>   stale-if-error rarely fires, 1101 storms don't surface to users.
+> - **All-CF path is ~40% faster** warm and Lighthouse perf 0.99
+>   vs droplet 0.76 on game pages (#78).
+> - **Both containers verified at parity**, including summary which
+>   only got tested on CF in 3C — no longer a surprise vector.
+>
+> Decisions for this cutover (4 questions answered 2026-05-08):
+> cut over today, simultaneous Python + summary, fresh same-day
+> Lighthouse baseline before flip, leave the perftest Worker
+> running through burn-in.
+
+##### Pre-flight
+
+- ☐ Confirm CI on the slim-image push (commit `b522946`) succeeded
+  and the slim Python image is now serving production on the
+  droplet. `gh run list --branch instrument-plus-cloudflare-cdn`
+  or browse the Actions tab.
+- ☐ Spot-check droplet: curl 3–5 different game pages, confirm
+  HTTP 200 with reasonable timings (~4 s warm).
+- ☐ Capture **fresh same-day Lighthouse + Playwright baseline**
+  on the droplet now that it's serving slim Python. Replaces
+  the 2026-05-08 droplet+heavy-image numbers as the comparison
+  point. `cd frontend && npx lhci autorun --config=lighthouserc.json`
+  and `BASE_URL=https://sports.unseen-university.org npx playwright test`.
+  Record perf scores under 3D Notes.
+- ☐ Confirm perftest Worker still healthy (it's the rollback
+  comparison if needed): `curl -sI https://sports-perftest.unseen-university.workers.dev/cfb/healthcheck`.
+
+##### Cutover
+
+- ☐ Edit [worker/wrangler.toml](../worker/wrangler.toml)
+  `[vars]`: flip three values from droplet-mode to container-mode:
+  ```toml
+  PYTHON_BACKEND = "container"      # was "droplet"
+  SUMMARY_BACKEND = "container"     # was "droplet"
+  CRON_WARM_ENABLED = "1"           # was "0"
+  ```
+  Leave `PREWARM_TOP_N = "0"` — Layer C only fires in peak mode
+  on Saturdays. Layer B (healthcheck warm) fires whenever
+  `CRON_WARM_ENABLED = "1"` AND `isGameWindow()`, which is what
+  we want.
+- ☐ `cd worker && wrangler deploy`. Capture the printed Version
+  ID for rollback.
+  > **DESTRUCTIVE STEP**: this is the cutover. Confirm with user
+  > before running.
+- ☐ Within 60 s of deploy: hit 3–5 game pages from a browser
+  (mix of completed, in-progress if any, and a fresh-cache one),
+  confirm HTTP 200 + body looks right.
+- ☐ Open `dash.cloudflare.com` → Workers & Pages → `sports` →
+  Logs. Stream live for 5–10 minutes; watch for unfamiliar
+  error events.
+
+##### Burn-in (48 h)
+
+What to monitor in Workers Logs / Workers Analytics:
+
+- Error rate ≤ droplet baseline (the per-week-1 stress-test
+  numbers showed ~7 of 20 IDs failing in both, ~35% — that's
+  the *bad-gameId* failure floor; for *real* user traffic the
+  baseline error rate is much lower).
+- `cron_warm` events all status=200 during in-window minutes
+  (Saturday 15:00–08:00 UTC). Failures here mean a regional
+  container provisioning issue — investigate but don't roll
+  back unless they're sustained.
+- p95 latency on `/cfb/game/*` ≤ baseline. Server-Timing logs
+  show `python;dur=<ms>` per request — should cluster around
+  2.3 s warm.
+- Container instance count stays bounded (≤ `max_instances=5` in
+  normal mode). Run-away scaling means a misconfig.
+- Memory under the 4 GiB standard-2 cap; OOMs would surface as
+  container restarts in the dashboard.
+- No new error event types we haven't seen before.
+
+If anything breaks: revert the three lines, redeploy, investigate
+on the perftest Worker. Droplet stays running through burn-in.
+
+- ☐ End of burn-in: declare cutover successful, advance to 3E.
+
+##### 3D cutover log (2026-05-08)
+
+**Pre-flight done.** Slim Python image successfully deployed to
+droplet via the GH Action that fired on push to
+`instrument-plus-cloudflare-cdn` (commits `b522946` etc.). Same-day
+Lighthouse + Playwright baseline against the droplet+slim
+combination:
+
+| URL | perf | fcp | lcp | si |
+| --- | --- | --- | --- | --- |
+| `/cfb/` | 0.70 | 391 ms | 1308 ms | 1123 ms |
+| `/cfb/game/401403910` | 0.64 | 797 ms | 1203 ms | 3625 ms |
+| `/cfb/year/2024/teams/differential` | 0.75 | 637 ms | 1066 ms | 825 ms |
+
+Within run-to-run noise of the pre-slim baseline — confirming the
+slim Python change doesn't materially affect frontend perf.
+Playwright 3/3 passing.
+
+**Cutover.** Edited `worker/wrangler.toml`:
+
+```diff
+- PYTHON_BACKEND = "droplet"
+- SUMMARY_BACKEND = "droplet"
++ PYTHON_BACKEND = "container"
++ SUMMARY_BACKEND = "container"
+- CRON_WARM_ENABLED = "0"
++ CRON_WARM_ENABLED = "1"
+```
+
+`cd worker && wrangler deploy`. **Version ID for rollback:
+`96158f7d-ff1b-46d0-b156-7375697c4245`**. The `v3-containers`
+DO migration ran on this deploy — `sports-pythoncontainer` and
+`sports-summarycontainer` container apps now exist in the CF
+account.
+
+**Post-cutover smoke** (within 60 s of deploy):
+
+| Test | Result | Notes |
+| --- | --- | --- |
+| `/cfb/healthcheck` | 200, 234 ms | Worker up |
+| `/cfb/` | 200, 1.38 s | KV-backed (no container call) |
+| `/cfb/game/401403910` (first call) | 200, **19.6 s** | Cold image-pull. Server-Timing `python;dur=18693`. Expected. |
+| `/cfb/game/401520434` (warm) | 200, **4.33 s** | Container is now warm |
+| `/cfb/year/2024/teams/differential` | 200, **0.45 s** | Cache hit on summary path |
+
+**Steady-state warm distribution** (6 calls, 3 gameIds):
+3.4–5.3 s, mean ~4.2 s. Server-Timing on a representative call:
+`python;dur=2857, total;dur=2875` — 18 ms Worker overhead, 2.86 s
+container path. Matches the 3A.7 measurement of 1.9–2.3 s warm +
+~150 ms Worker render.
+
+Cache-Control header on game responses:
+`public, max-age=86400, s-maxage=31536000, stale-if-error=86400`.
+Layer E live. CF-Ray every call shows `…-ATL` — region pinning
+working.
+
+**Cutover declared live 2026-05-08 03:08 UTC.** Burn-in started.
+Droplet still running as rollback fallback.
 
 #### 3E — Decommission droplet + Redis containers
 
