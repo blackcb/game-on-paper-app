@@ -3131,6 +3131,25 @@ Until that plan is built, leave Phase 4 deferred and revisit annually.
 Items not on the migration critical path but worth tracking so they
 don't get lost. Promote to a phase when one becomes urgent.
 
+- **Tighten / repair the `/cfb/process` JSON Schema contract** —
+  Workers Logs from the 3D cutover spot-check showed a
+  `schema_validation_failure` event for gameId `401520222`:
+  > `instancePath: "/id"`, `keyword: "type"`, expected `integer`,
+  > Python returned a string.
+
+  `validateProcessResponse` is warn-only (per perf-plan Day 4), so
+  the response still rendered — but it means our JSON Schema and
+  Python's actual output have drifted. Fix is one of:
+    1. Update the schema in `python/schemas.py` to allow either
+       `string` or `integer` for that field, regenerate
+       `shared/process-response.schema.json`.
+    2. Fix Python to coerce `id` to `integer` before serializing.
+    3. Make the validator failure-loud instead of warn-only once
+       drift is squashed, so future divergence is caught in CI.
+  Lives in the perf-plan Day 4 area but doesn't block any phase.
+  Promote to active work the next time anyone touches Python schema
+  validation or sees the warning recur on more fields.
+
 - **Take ownership of the summary data pipeline (CFBD API key)** —
   3A.6b shipped option (A): mirror upstream `cfb-team-summaries`
   weekly via GH Action, extract data, rebuild slim image. That
