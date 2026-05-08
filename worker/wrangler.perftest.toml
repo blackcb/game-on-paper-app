@@ -1,0 +1,84 @@
+# Perf-test Worker: production code, container backend active.
+#
+# Deployed as a *separate Worker* (name = "sports-perftest")
+# alongside the real production Worker (name = "sports") so we can
+# exercise the all-Cloudflare path end-to-end without touching
+# production. Reachable at sports-perftest.unseen-university.workers.dev.
+#
+# Used to validate:
+#   - Container path actually works for both Python + summary
+#   - Summary container runs correctly on CF (only tested locally so far)
+#   - Cache layers behave under realistic patterns
+#   - Page-level latency / Lighthouse against the container path
+#   - Whether 1101 error storms surface to users through SWR + stale-if-error
+#
+# Delete after 3D cutover is stable.
+
+name = "sports-perftest"
+main = "src/index.tsx"
+account_id = "ebe521cb5b561683303b77d32e240ba4"
+compatibility_date = "2026-05-02"
+compatibility_flags = ["nodejs_compat"]
+
+[dev]
+port = 8787
+
+[triggers]
+crons = ["* * * * *"]
+
+[assets]
+directory = "./public"
+
+# Production KV namespaces — reads are safe (cache hits), writes are
+# TTL'd. Separate KV would mean a cold cache for the perf test but
+# also leaves no risk of polluting production state with bad data
+# from a misbehaving container; for a first smoke test, sharing is
+# fine. Switch to dedicated namespaces if we see weirdness.
+[[kv_namespaces]]
+binding = "LEAGUE_DATA"
+id = "649602a55c7048c5ba433bdece6ba731"
+
+[[kv_namespaces]]
+binding = "SUMMARY_LAST_UPDATED"
+id = "564be97a4ca8419a9ccdc8b0be0f1c3d"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[vars]
+# Backends ON — this is the whole point of the perf-test Worker.
+PYTHON_BACKEND = "container"
+SUMMARY_BACKEND = "container"
+# Still set the URLs so a later flip back to droplet is one var.
+PYTHON_BASE_URL = "https://python.unseen-university.org"
+SUMMARY_BASE_URL = "https://summary.unseen-university.org"
+SEASON_MODE = "normal"
+CRON_WARM_ENABLED = "0"
+PREWARM_TOP_N = "0"
+
+[[containers]]
+class_name = "PythonContainer"
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim"
+max_instances = 5
+instance_type = "standard-2"
+constraints = { regions = ["ENAM", "WNAM"] }
+
+[[containers]]
+class_name = "SummaryContainer"
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-summary:slim"
+max_instances = 3
+instance_type = "standard-2"
+constraints = { regions = ["ENAM", "WNAM"] }
+
+[[durable_objects.bindings]]
+name = "PYTHON_CONTAINER"
+class_name = "PythonContainer"
+
+[[durable_objects.bindings]]
+name = "SUMMARY_CONTAINER"
+class_name = "SummaryContainer"
+
+[[migrations]]
+tag = "v3-containers"
+new_sqlite_classes = ["PythonContainer", "SummaryContainer"]

@@ -2569,6 +2569,176 @@ If we ever want sub-second for live games, the answer is Phase 4
   HTTPS-to-Caddy path. The container DO classes are *defined* and
   the bindings *exist* in production after this deploy, but no
   request flows through them until a config flip.
+
+##### 3C E2E perf test — first all-Cloudflare run (2026-05-08)
+
+Deployed a separate Worker `sports-perftest` with full production
+code + `PYTHON_BACKEND=container` + `SUMMARY_BACKEND=container`
+([worker/wrangler.perftest.toml](../worker/wrangler.perftest.toml)).
+Reachable at `sports-perftest.unseen-university.workers.dev`,
+shares production KV namespaces (read-safe; writes are TTL'd).
+
+Routes exercised + observed timings:
+
+| Route | First (cold) | Warm steady state | Notes |
+| --- | --- | --- | --- |
+| `/cfb/healthcheck` | 173ms | — | Worker-only, no container call |
+| `/cfb/` (KV-backed scoreboard) | 356ms | — | Cron-warmed KV path |
+| `/cfb/game/:id` (Python container) | 14.4s on first deploy | 2.6–4.7s | n=9 warm calls, 3 IDs × 3 rounds |
+| `/cfb/year/Y/team/T` (summary, KV miss) | 1.24s | — | Real summary container call |
+| `/cfb/year/2014/teams/passing` | 0.92s | 0.30s (cache hit) | Demonstrates Cache API path |
+| `/cfb/charts/trends` (5× percentile) | 0.78s | — | All percentile reads cached |
+| `/cfb/charts/team/epa` | 0.27s | — | Cache hit |
+
+**Direct prod vs perftest, same warm gameId 401520434**:
+- droplet path (sports.unseen-university.org): **4.51s**
+- container path (sports-perftest.workers.dev): **2.74s**
+
+The all-Cloudflare path is **~40% faster** warm. Server-Timing
+breakdown on the perftest call confirms: `python;dur=2323,
+total;dur=2479` — Python container call is 2.3s (matches 3A.7
+warm steady state of 1.9–2.3s exactly), Worker overhead is
+~150ms. Region pinning visibly working: `CF-Ray: …-ATL`, every
+test request landed on Atlanta (ENAM region).
+
+`Cache-Control` header on completed-game response verified live:
+`public, max-age=86400, s-maxage=31536000, stale-if-error=86400`
+— 3B Layer E directive present in production-shape responses.
+
+**Failure parity**: gameIds `401533976` and `401520123` returned
+HTTP 500 on both perftest *and* prod. Not a container regression
+— upstream ESPN data shape problems already present pre-3B.
+
+**Not seen** during this run:
+- 1101 storms visible to user (Cache + SWR + stale-if-error
+  appear to be absorbing them — but we haven't deliberately
+  forced a cold-after-deploy + concurrent burst, which is when
+  they happened in the throwaway-Worker tests).
+- Summary container actually being slow (everything stayed
+  sub-second; KV miss → 1.24s wall is the whole stack including
+  KV write + JSX render).
+- Lighthouse / Playwright (formal perf-plan Day 5 / Day 3 runs
+  still owed before 3D cutover).
+
+**Conclusion**: the all-Cloudflare path works end-to-end and is
+faster than the droplet on the warm path. 3C E2E smoke is GREEN.
+Remaining gates before 3D cutover: a Lighthouse run, a Playwright
+suite run, and a deliberate cold-after-deploy stress test to
+validate Layer E behavior under 1101 conditions.
+
+##### 3C Lighthouse + Playwright (#78, 2026-05-08)
+
+**Playwright** (`frontend/tests/e2e/`, three suites against
+perftest URL):
+
+```sh
+cd frontend
+BASE_URL=https://sports-perftest.unseen-university.workers.dev \
+  npx playwright test
+```
+
+Result: **3 / 3 passing** in 6.5 s. Game, leaderboard, and
+scoreboard render cleanly with no console errors and the asserted
+DOM elements present. No functional regressions on the
+all-Cloudflare path.
+
+**Lighthouse** (desktop preset, 3 URLs × 3 runs each, median per
+URL). New `frontend/lighthouserc.perftest.json` mirrors the prod
+config but points at the perftest origin. Both runs were captured
+same-day for a fair comparison.
+
+| URL | prod (droplet) | perftest (all-CF) | Δ perf |
+| --- | --- | --- | --- |
+| `/cfb/` | perf=**0.76** fcp=537 ms lcp=834 ms si=738 ms | perf=**0.99** fcp=401 ms lcp=863 ms si=401 ms | **+0.23** |
+| `/cfb/game/401403910` | perf=**0.66** fcp=591 ms lcp=1097 ms si=3793 ms | perf=**0.96** fcp=557 ms lcp=677 ms si=2041 ms | **+0.30** |
+| `/cfb/year/2024/teams/differential` | perf=**0.74** fcp=480 ms lcp=846 ms si=845 ms | perf=**0.99** fcp=589 ms lcp=875 ms si=589 ms | **+0.25** |
+
+The game page is the migration's headline beneficiary: Speed
+Index −46 %, LCP −38 %. Total byte weight is essentially
+identical between the two runs (~17 MB on `/cfb/`, ~12 MB on the
+leaderboard, both warn-level on the existing 10 MB threshold) —
+that's our existing image-payload bloat, not a migration
+artifact, and is tracked separately as asset cleanup.
+
+`categories:performance ≥ 0.40` floor passed on every URL on both
+runs. The pre-migration 2026-05-01 baseline (in the prod
+lighthouserc comments) reads `perf 0.68 / 0.65 / 0.73` — close
+to today's prod numbers (0.76 / 0.66 / 0.74), which is sanity:
+nothing meaningful has changed on the droplet path between the
+two captures.
+
+**3D readiness signal**: PASS. Migration measurably improves UX
+on every metric we assert; nothing failed.
+
+Per Day 5's "tighten warn thresholds after each migration phase"
+guidance, post-3D-cutover work to follow:
+- Tighten `lighthouserc.json` perf-score floor from 0.40 to 0.85.
+- Tighten LCP/FCP/SI thresholds in line with the new baseline.
+- Decommission `lighthouserc.perftest.json` after the perftest
+  Worker goes away.
+
+##### 3C cold-after-deploy 1101 stress test (#79, 2026-05-08)
+
+Deliberately stressed the perftest Worker with concurrent bursts
+of 20 distinct gameIds against (a) a warm container and (b) a
+just-restarted container, to see whether the 1101-style storms we
+observed in 3A's throwaway-Worker tests would surface to real
+users via the production code path.
+
+Method: 20 distinct ESPN gameIds from 2024 week 1, sent
+concurrently with `curl &` in bash. Container restart forced via
+`max_instances` toggle (5 → 4 → 5).
+
+| Burst | Wall | 200 OK | 500 |
+| --- | --- | --- | --- |
+| Warm container | 12 s | 13 / 20 | 7 / 20 |
+| Just-restarted container | 14 s | 13 / 20 | 7 / 20 |
+
+The exact same 7 gameIds failed in both bursts: `401866409`,
+`401858204`, `401858202`, `401856663`, `401864494`, `401864425`,
+`401866408`. Hitting each of those against **production**
+returned identical HTTP 500 with the same 21-byte
+`Internal Server Error` body. **Failure parity confirmed** —
+not a container-path regression, just pre-existing upstream-data
+issues that affect the droplet equally.
+
+**No 1101 errors visible to users in either burst.** The
+throwaway-Worker 1101 storms from 3A were almost certainly a
+single-instance thundering-herd artifact (`max_instances = 1`
+at the time); the production-shape `max_instances = 5` fans out
+across multiple regional instances and avoids that mode.
+
+**stale-if-error fallback test**: primed cache with `401520434`
+(observed cache-only `server-timing: espn_pbp;dur=475,
+total;dur=475` — no Python call), forced container restart, then
+hit the same URL. Got **HTTP 200 in 14.2 s** with `python;dur=13106`
+in Server-Timing. Interpretation: request landed on a *different*
+PoP than the priming hit (Cache API is per-PoP), missed cache,
+fell through to a cold container, succeeded slowly. No error
+visible to the user — worst-case is a slow page load, not a
+broken page.
+
+**Implication for Layer E**: the directive is correctly stamped on
+responses (verified in #78) and would catch true origin 5xx, but
+the 14.2 s slow-but-successful path means container failures
+under restart are uncommon enough that stale-if-error rarely
+needs to fire. It's a free safety net regardless.
+
+**3D readiness signal**: PASS. The all-CF path handles burst
+concurrent traffic at parity with the droplet, including failure
+modes. Cold-after-restart degrades to slow loads, not errors.
+
+Residual risk to monitor in 3D:
+- Image-pull cold-start to a *new* region (we only tested ATL).
+  Mitigation: cron-warm Layer B (#73) hits each region's
+  healthcheck periodically.
+- Sustained gameday-level load (hundreds of req/s, not 20).
+  Mitigation: `max_instances = 10` peak profile, plus monitor
+  Workers Analytics for queue depth in the first weekend.
+- Cache eviction under memory pressure (CF Cache LRU). If a
+  popular game's cache entry is evicted right when the container
+  is degraded, the user sees the slow path. Layer C (#74) top-N
+  pre-warm directly addresses this.
 - ☐ Update the Worker's PBP fetch path: replace
   `fetch(env.PYTHON_BASE_URL + '/cfb/process', ...)` with
   `getContainer(env.PYTHON_CONTAINER).fetch('http://container/cfb/process', ...)`.

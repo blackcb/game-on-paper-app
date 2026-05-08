@@ -25,8 +25,12 @@ frontend/.last-run.json
 frontend/playwright/.cache/
 
 # Lighthouse CI local artifacts (regenerated on every run; CI uploads
-# to temporary-public-storage instead)
+# to temporary-public-storage instead). The .perftest / .prod variants
+# are ad-hoc renames done during 3C task #78 to keep the perftest and
+# prod runs from clobbering each other.
 frontend/.lighthouseci/
+frontend/.lighthouseci.perftest/
+frontend/.lighthouseci.prod/
 
 # Python venv (per-developer, never committed)
 python/.venv/
