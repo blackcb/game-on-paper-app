@@ -139,7 +139,13 @@ constraints = { regions = ["ENAM", "WNAM"] }
 
 [[containers]]
 class_name = "SummaryContainer"
-image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-summary:slim"
+# 2026-05-08 burn-in fix: SIGTERM handler added to summary Node app
+# (server.close + process.exit). See summary/server/src/app.ts. The
+# `:slim-sigterm-fix` tag is a unique label so wrangler picks up the
+# new digest at deploy time — pushing to `:slim` alone left CF
+# referencing the old digest. Once 3D burn-in stable for 48h, retag
+# to `:slim` and squash this comment.
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-summary:slim-sigterm-fix"
 max_instances = 3
 instance_type = "standard-2"
 constraints = { regions = ["ENAM", "WNAM"] }

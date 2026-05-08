@@ -805,6 +805,22 @@ app.get("/updated", async (req, res, next) => {
 const port: string = process.env.PORT || '3000';
 
 console.log(`server starting at port ${port}`);
-app.listen(port, async () => {
+const server = app.listen(port, async () => {
     console.log(`server started at port ${port}`);
+});
+
+// 3D burn-in fix (2026-05-08): the @cloudflare/containers lifecycle
+// wrapper sends SIGTERM when sleepAfter expires, expecting the
+// process to exit so the container instance can be torn down. Plain
+// Node ignores SIGTERM as long as there are active handles (Express's
+// listening socket counts), so the wrapper kept rescheduling alarms
+// and re-sending SIGTERM every 3 minutes, leaving the container
+// "Active" indefinitely. Closing the HTTP server explicitly lets
+// the event loop drain and the process exit cleanly. The 5-second
+// hard-exit fallback covers the case where keepalive connections
+// keep the listener busy past the grace window.
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received — closing server');
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
 });
