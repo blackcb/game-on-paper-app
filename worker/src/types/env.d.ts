@@ -21,6 +21,7 @@ declare namespace Cloudflare {
     SEASON_MODE?: string;
     CRON_WARM_ENABLED?: string;
     PREWARM_TOP_N?: string;
+    PREWARM_BASE_URL?: string;
     PYTHON_BASE_URL: string;
     SUMMARY_BASE_URL: string;
     WORKER_SHARED_SECRET?: string;

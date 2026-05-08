@@ -120,6 +120,11 @@ SEASON_MODE = "normal"
 # "8-10" at that point.
 CRON_WARM_ENABLED = "0"
 PREWARM_TOP_N = "0"
+# Layer C self-fetch target. The Worker is bound to this hostname via
+# Cloudflare Routes; cron-fired prewarms hit it from inside the
+# Worker so the response lands in caches.default at the cron-firing
+# PoP.
+PREWARM_BASE_URL = "https://sports.unseen-university.org"
 
 # Sub-phase 3B: Cloudflare Container bindings. The Container DO
 # subclasses are exported from src/index.tsx (re-exported from

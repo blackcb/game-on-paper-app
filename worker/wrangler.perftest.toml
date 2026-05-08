@@ -56,6 +56,7 @@ SUMMARY_BASE_URL = "https://summary.unseen-university.org"
 SEASON_MODE = "normal"
 CRON_WARM_ENABLED = "0"
 PREWARM_TOP_N = "0"
+PREWARM_BASE_URL = "https://sports-perftest.unseen-university.workers.dev"
 
 [[containers]]
 class_name = "PythonContainer"

@@ -52,6 +52,7 @@ SUMMARY_BACKEND = "container"
 SEASON_MODE = "peak"
 CRON_WARM_ENABLED = "1"
 PREWARM_TOP_N = "10"
+PREWARM_BASE_URL = "https://sports.unseen-university.org"
 
 [[containers]]
 class_name = "PythonContainer"

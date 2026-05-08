@@ -2789,34 +2789,71 @@ The container's idle-resume cold-start is real (8–15s). Layer A
 (`stale-if-error`, added in 3B) hide it for repeat traffic. B
 and C below close the remaining gaps.
 
-- ☐ **Layer B — gameday-window healthcheck cron**. Workers Cron
-  Trigger that hits `/healthcheck` on the container DO every
-  ~2 minutes during football season game hours
-  (Sat 11:00–23:00 ET, plus Tue/Wed/Thu/Fri evenings if there are
-  scheduled games). Keeps the regional instance from sleeping.
-  - Cron schedule (Workers Cron uses UTC): start with
-    `*/2 15-3 * 9-12 6` (Sat 15:00 UTC – Sun 03:00 UTC, ~Sept–Dec).
-    Refine after the first season.
-  - Cost: ~360 calls × 30 ms warm = ~11 active CPU-seconds per
-    Saturday. Negligible.
-  - Kill-switch: a `CRON_WARM_ENABLED` env binding so we can
-    disable without redeploy.
-- ☐ **Layer C — top-N game pre-warm cron**. Same Cron Trigger
-  (or a second one), runs every 2–3 minutes during gameday game
-  hours. Calls `/cfb/process` for the top-N games scheduled
-  *today* (read from a daily-refreshed KV entry populated by an
-  early-morning cron from the schedule API). Populates Cache API
-  before users arrive.
-  - N = 8–10. Tunable.
-  - Cost (estimate): 10 games × 5s active CPU × 30 cron runs /
-    Saturday = ~25 active CPU-minutes per Saturday. Modest.
-  - Implementation: `worker/src/cron.ts` exports a `scheduled`
-    handler; selects games via the `GAMES_TODAY` KV entry; uses
-    `caches.default.put(...)` to seed the cache directly so the
-    user's request is a hit rather than just a warm container.
-  - Kill-switch: same `CRON_WARM_ENABLED` env binding gates both B
-    and C. Layer C also has a `PREWARM_TOP_N=0` knob to disable
-    just C and keep B.
+- ☑ **Layer B — gameday-window healthcheck cron**. **Done
+  2026-05-08.** Reused the existing per-minute Workers Cron
+  Trigger (`[triggers] crons = ["* * * * *"]`) rather than adding
+  a second schedule, so the cron-warm logic lives in the existing
+  `scheduled` handler in [worker/src/index.tsx](../worker/src/index.tsx).
+  - [worker/src/lib/cron.ts](../worker/src/lib/cron.ts) — new
+    module with `isGameWindow(now)` (Sat 15:00 UTC → Sun 08:00
+    UTC) and `pingContainers(env)` (parallel `/healthcheck` to
+    Python + summary container DOs, structured-JSON log per
+    ping). Defensive against missing bindings so it doesn't crash
+    on a wrangler config without container blocks.
+  - The scheduled handler now fires `pingContainers(env)` if
+    `env.CRON_WARM_ENABLED === "1"` AND `isGameWindow()` is true.
+    Per-minute fire rate × 13-hour Saturday window = ~780 pings,
+    each ~30 ms warm = ~23 active container-seconds per Saturday.
+    Negligible.
+  - Kill-switch: `CRON_WARM_ENABLED="0"` in `[vars]` disables
+    without code change. Currently set to `0` in
+    `wrangler.toml` (normal-mode default, no Sat-deploy fallback)
+    and `wrangler.offseason.toml`; set to `"1"` in
+    `wrangler.peak.toml`. **Cutover note**: when 3D flips
+    `wrangler.toml` from `*_BACKEND=droplet` to `=container`, also
+    bump `CRON_WARM_ENABLED` to `"1"` so weekday-deployed-on-Sat
+    fallback works.
+  - Tests: 8 new in `worker/test/cron.test.ts` covering window
+    boundaries (Sat 15:00 UTC open, Sun 08:00 UTC close, weekdays,
+    Sun afternoon). vitest 153/153.
+- ☑ **Layer C — top-N game pre-warm cron**. **Done 2026-05-08.**
+  - `prewarmTopGames` in [worker/src/lib/cron.ts](../worker/src/lib/cron.ts)
+    reads the per-minute-warmed scoreboard out of KV (key
+    `cfb-scoreboard-80`, populated by `writeCurrentScoreboard` at
+    the top of `scheduled`). KV miss falls through to the live
+    ESPN scoreboard fetch — so cron-warm doesn't depend on a
+    successful prior cron tick.
+  - Picks top-N games by ranking in-progress games above scheduled
+    games (in-progress = highest cache pressure, most volatile);
+    secondary order is whatever ESPN returns (start time-ish).
+  - Self-fetches `${PREWARM_BASE_URL}/cfb/game/${id}` for each
+    top-N game in parallel via `globalThis.fetch`. The Worker
+    receives that request, runs the full render pipeline, and
+    writes the rendered HTML into `caches.default` at the
+    cron-firing PoP.
+  - Throttled to every-3-minutes within the gameday window via
+    `minute % 3 === 0` in the scheduled handler. Layer B
+    (healthcheck) stays at every-1-minute since it's much cheaper.
+  - Cost (rough): 10 games × ~5 s container CPU × 20 firings /
+    Saturday hour × 13 hours ≈ 130 active container-minutes per
+    Saturday. Bounded; `PREWARM_TOP_N=0` disables, smaller N
+    proportionally smaller.
+  - **Locality caveat**: CF Crons fire from a single region, so
+    only that PoP's `caches.default` gets warmed. Other PoPs see
+    the cache miss on first user request. Acceptable for a first
+    ship — Workers Logs will tell us whether multi-region
+    warming is worth building.
+  - Knobs:
+    - `PREWARM_TOP_N` env var (`0` disables Layer C, `peak.toml`
+      sets `10`). Set on all four wrangler configs.
+    - `PREWARM_BASE_URL` env var. Production configs point at
+      `https://sports.unseen-university.org`; the perftest config
+      points at its own workers.dev URL so prewarms hit the
+      perftest Worker rather than bleeding into prod.
+  - Tests: 5 new in `worker/test/cron.test.ts` covering the no-op
+    paths (PREWARM_TOP_N=0, no PREWARM_BASE_URL, empty
+    scoreboard) and the top-N selection (in-progress ranks above
+    scheduled, count is respected). vitest 158/158.
 - ☐ Verify Layer A + B + C + E together by running a synthetic
   load test against the preview — simulate gameday traffic
   patterns (mix of cache hits, in-progress refreshes, top-N

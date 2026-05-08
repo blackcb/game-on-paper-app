@@ -59,6 +59,7 @@ import {
 import { TrendsPage } from "./templates/Trends";
 import { time, timingMiddleware } from "./lib/timing";
 import { pythonBackend, summaryBackend } from "./lib/backends";
+import { isGameWindow, pingContainers, prewarmTopGames } from "./lib/cron";
 import { PythonContainer, SummaryContainer } from "./containers";
 
 // Re-export the Container DO subclasses so wrangler can find them
@@ -102,6 +103,10 @@ type Bindings = {
   // Cron-warm kill-switch + Layer C top-N knob (3C).
   CRON_WARM_ENABLED?: string;
   PREWARM_TOP_N?: string;
+  // Layer C self-fetch target. Defaults to the prod hostname; the
+  // perftest profile points at its own workers.dev URL so prewarms
+  // hit the perftest Worker instead of bleeding into prod.
+  PREWARM_BASE_URL?: string;
 };
 
 // Bundle the per-request summary-client config so route handlers
@@ -811,6 +816,25 @@ async function scheduled(
         ),
       ),
   );
+
+  // Sub-phase 3C Layer B: keep containers warm during gameday window.
+  // Gated on the env-var kill-switch + the in-window check so
+  // (a) misconfigured deploys (CRON_WARM_ENABLED=0) don't ping, and
+  // (b) off-window cron ticks don't waste container time.
+  if (env.CRON_WARM_ENABLED === "1" && isGameWindow()) {
+    ctx.waitUntil(pingContainers(env));
+
+    // Sub-phase 3C Layer C: top-N game pre-warm. Materially more
+    // expensive than Layer B (N full /cfb/process pipeline runs vs.
+    // a healthcheck), so throttle to every 3 minutes within the
+    // gameday window even though the cron itself fires per minute.
+    // PREWARM_TOP_N=0 in env disables Layer C while keeping Layer B
+    // active — used by the `normal` profile (weekday in-season).
+    const minute = new Date().getUTCMinutes();
+    if (minute % 3 === 0) {
+      ctx.waitUntil(prewarmTopGames(env));
+    }
+  }
 }
 
 // Hono needs an explicit object export to expose both fetch and
