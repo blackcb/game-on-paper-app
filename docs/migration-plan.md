@@ -3030,6 +3030,26 @@ Droplet still running as rollback fallback.
 - ☐ Delete the Redis Dockerfiles ([redis/Dockerfile.cache](../redis/Dockerfile.cache),
   [redis/Dockerfile.lru](../redis/Dockerfile.lru), and the .conf files).
 - ☐ Update [CLAUDE.md](../CLAUDE.md) to reflect the new architecture.
+- ☐ Tear down the test Workers and their orphaned container apps:
+  ```sh
+  cd worker-coldstart && wrangler delete                # if not already
+  cd worker && wrangler delete --config wrangler.perftest.toml
+  # `wrangler delete` removes the Worker but leaves the container
+  # app + running instances. List + delete each orphan explicitly:
+  wrangler containers list                               # find IDs
+  wrangler containers delete <id>                        # repeat per orphan
+  ```
+  Then delete the now-defunct test config files from the repo:
+  `worker/wrangler.perftest.toml`, `frontend/lighthouserc.perftest.json`,
+  and the `worker-coldstart/` directory.
+
+  Lesson learned 2026-05-08: deleting a Worker via `wrangler delete`
+  does NOT cascade to its `[[containers]]` apps. Container instances
+  keep running (and billing) until the container app is explicitly
+  deleted. Confirmed: after `wrangler delete sports-perftest` and
+  `wrangler delete gop-coldstart-test`, three container apps
+  remained Active in `wrangler containers list` until manually
+  deleted by ID.
 
 ### Acceptance
 
