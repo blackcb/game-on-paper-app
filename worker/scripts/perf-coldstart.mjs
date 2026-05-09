@@ -60,6 +60,7 @@ async function probe(url) {
     ttfb: Math.round(tHeaders - t0),
     total: Math.round(tTotal - t0),
     cfCache: res.headers.get("cf-cache-status") ?? "-",
+    workerCache: res.headers.get("x-worker-cache") ?? "-",
     serverTiming: res.headers.get("server-timing") ?? "-",
     bytes: body.length,
   };
@@ -76,10 +77,10 @@ const cacheBuster = `_perf=${Date.now().toString(36)}`;
 console.log(`probing ${BASE_URL} with ${gameIds.length} game IDs`);
 console.log();
 console.log(
-  "  #  game-id    state  cf-cache    ttfb       total      python     bytes",
+  "  #  game-id    state  cf-cache    wkr-cache  ttfb       total      python     bytes",
 );
 console.log(
-  "  -- ---------- ------ ---------- ---------- ---------- ---------- ------",
+  "  -- ---------- ------ ---------- ---------- ---------- ---------- ---------- ------",
 );
 
 const rows = [];
@@ -97,7 +98,7 @@ for (let i = 0; i < gameIds.length; i++) {
     const py = parsePython(p.serverTiming);
     console.log(
       `  ${String(i + 1).padStart(2)} ${id.padEnd(10)} ${state.padEnd(6)} ` +
-        `${p.cfCache.padEnd(10)} ${(p.ttfb + "ms").padStart(8)}   ` +
+        `${p.cfCache.padEnd(10)} ${p.workerCache.padEnd(10)} ${(p.ttfb + "ms").padStart(8)}   ` +
         `${(p.total + "ms").padStart(7)}    ${
           py != null ? (py + "ms").padStart(7) : "      -"
         }    ${String(p.bytes).padStart(6)}`,

@@ -617,35 +617,42 @@ app.get("/cfb/game/:gameId", async (c) => {
     c.req.query("json") === "true" || c.req.query("json") === "1";
   const previewMode = c.req.query("preview_mode");
 
-  // Cache layer for /cfb/game/* uses both:
-  //   1. CF's standard cache via the Cache Rule from sub-phase 2I
-  //      (Caching → Cache Rules → game-page-edge-cache; hostname=
-  //      sports.unseen-university.org AND path starts_with
-  //      /cfb/game/; Edge TTL = "Use cache-control header if
-  //      present, bypass cache if not"). The rule short-circuits
-  //      before the Worker runs on cache HIT.
-  //   2. Explicit `caches.default.put` from the Worker (below)
-  //      to actually populate the cache the Cache Rule reads.
+  // Cache layer for /cfb/game/*: per-PoP `caches.default`,
+  // populated by the Worker on render and read at the top of this
+  // route. All four branches below (quarantine, pregame, game-
+  // error, main game) call `cache.put`, so a single match here
+  // covers any branch's prior put.
   //
-  // Initially I tried dropping (2) — assuming Cache-Control on the
-  // Worker's response would auto-populate via Origin Cache Control
-  // mode. Empirically that's wrong: with no explicit
-  // `caches.default.put`, the standard cache layer never holds a
-  // copy and `cf-cache-status` doesn't appear on responses at all
-  // (validated 2026-05-07). So the Worker still needs to put.
+  // History: Phase 2I tried to short-circuit HITs at the edge via
+  // a Cache Rule running before the Worker, and on that bet we
+  // DROPPED `caches.default.match` from this route. The Cache
+  // Rule never engaged on this account (parked 2026-05-07; see
+  // migration-plan §2I), which meant every game-page request was
+  // running the full Worker → Container → Python pipeline —
+  // confirmed 2026-05-09 by worker/scripts/perf-coldstart.mjs
+  // (cf-cache-status: -, hit-path TTFB ≈ 2.5s on repeat hits).
+  // Re-adding the match returns same-PoP HITs in ~50ms instead.
   //
-  // We DROP the `caches.default.match` at the top of the route
-  // because the Cache Rule handles HITs at the edge before the
-  // Worker runs — by the time we get here, this PoP definitely
-  // missed and the Worker needs to render fresh.
-  //
-  // Cross-PoP pooling: doesn't engage on this plan even with
-  // Smart Tiered Cache enabled (validated 2026-05-05; see
-  // "2I — outcome (validated 2026-05-05)" Notes section).
-  // So per-PoP caching is what we get; the Cache Rule's win is
-  // "skip the Worker on same-PoP hits".
+  // Cross-PoP pooling still doesn't engage (Smart Tiered Cache
+  // limitation on this plan, validated 2026-05-05) — first hit
+  // per PoP still pays the container cost. Cron-warm + cold-start
+  // mask cover that case.
   const cache = caches.default;
   const cacheKey = new Request(c.req.url, { method: "GET" });
+
+  const cached = await cache.match(cacheKey);
+  if (cached != null) {
+    // Add a worker-cache HIT signal for logs and the perf probe;
+    // CF's `cf-cache-status` won't appear because this response
+    // is coming from the Worker, not the CDN edge.
+    const headers = new Headers(cached.headers);
+    headers.set("x-worker-cache", "HIT");
+    return new Response(cached.body, {
+      status: cached.status,
+      statusText: cached.statusText,
+      headers,
+    });
+  }
 
   // Quarantine gate runs before ESPN — short-circuits the probe
   // entirely. We still need the gameInfo for the error template's
