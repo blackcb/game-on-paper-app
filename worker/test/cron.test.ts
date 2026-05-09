@@ -34,14 +34,41 @@ describe("isGameWindow", () => {
     expect(isGameWindow(new Date("2026-09-05T14:00:00Z"))).toBe(false);
   });
 
-  it("is false on a weekday", () => {
-    expect(isGameWindow(new Date("2026-09-08T20:00:00Z"))).toBe(false); // Tue
+  it("is false on a weekday afternoon (before evening window)", () => {
+    expect(isGameWindow(new Date("2026-09-08T20:00:00Z"))).toBe(false); // Tue 20:00 UTC
     expect(isGameWindow(new Date("2026-09-10T20:00:00Z"))).toBe(false); // Thu
     expect(isGameWindow(new Date("2026-09-11T20:00:00Z"))).toBe(false); // Fri
   });
 
   it("is false on Sunday afternoon", () => {
     expect(isGameWindow(new Date("2026-09-06T18:00:00Z"))).toBe(false);
+  });
+
+  // Weekday-evening window (added 2026-05-09): Tue–Fri 22:00 UTC →
+  // Wed–Sat 04:00 UTC, covering MAC midweeks + Thu/Fri primetime.
+  it("is true at Tuesday 22:00 UTC (weekday-evening window opens)", () => {
+    expect(isGameWindow(new Date("2026-09-08T22:00:00Z"))).toBe(true);
+  });
+
+  it("is true at Friday 23:30 UTC (Friday primetime)", () => {
+    expect(isGameWindow(new Date("2026-09-11T23:30:00Z"))).toBe(true);
+  });
+
+  it("is true at Wednesday 03:00 UTC (Tue-night MAC bleed-over)", () => {
+    expect(isGameWindow(new Date("2026-09-09T03:00:00Z"))).toBe(true);
+  });
+
+  it("is false at Wednesday 04:00 UTC (weekday-evening window closes)", () => {
+    expect(isGameWindow(new Date("2026-09-09T04:00:00Z"))).toBe(false);
+  });
+
+  it("is false at Tuesday 21:59 UTC (one minute before weekday open)", () => {
+    expect(isGameWindow(new Date("2026-09-08T21:59:00Z"))).toBe(false);
+  });
+
+  it("is false on Monday evening (no Monday window)", () => {
+    expect(isGameWindow(new Date("2026-09-07T22:00:00Z"))).toBe(false);
+    expect(isGameWindow(new Date("2026-09-07T23:30:00Z"))).toBe(false);
   });
 });
 

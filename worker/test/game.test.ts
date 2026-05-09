@@ -278,7 +278,7 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     expect(body).toContain("var gameData =");
   });
 
-  it("completed games set long s-maxage Cache-Control with stale-if-error fallback (3B Layer E)", async () => {
+  it("completed games set long s-maxage Cache-Control with SWR + stale-if-error (3B Layer E + 2026-05-09 cold-start mask)", async () => {
     const id = uniqueGameId();
     mockEspnThenPython(undefined, pythonPbpResponse());
     const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
@@ -286,8 +286,12 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     // serve the last cached body for up to 24 h if the origin
     // 5xxs. Closes the gap when a cache miss lands on a Cloudflare
     // Container in image-pull cold start.
+    //
+    // 2026-05-09 cold-start mask: `stale-while-revalidate=86400`
+    // hides the LRU-eviction-then-cold-container case. Completed-
+    // game bytes are static so SWR is a semantic no-op.
     expect(res.headers.get("cache-control")).toBe(
-      "public, max-age=86400, s-maxage=31536000, stale-if-error=86400",
+      "public, max-age=86400, s-maxage=31536000, stale-while-revalidate=86400, stale-if-error=86400",
     );
   });
 
@@ -322,7 +326,7 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/json");
     expect(res.headers.get("cache-control")).toBe(
-      "public, max-age=86400, s-maxage=31536000, stale-if-error=86400",
+      "public, max-age=86400, s-maxage=31536000, stale-while-revalidate=86400, stale-if-error=86400",
     );
     const body = (await res.json()) as { gameInfo: { id: string } };
     expect(body.gameInfo.id).toBe("401628412");
@@ -343,7 +347,12 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     });
     const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
     expect(res.status).toBe(200);
-    expect(res.headers.get("cache-control")).toBe("public, max-age=300, s-maxage=300");
+    // 2026-05-09 cold-start mask: pregame hits the summary container
+    // for matchup percentiles. SWR + stale-if-error capped at 300 s
+    // so the stale window can't outlive an actual kickoff transition.
+    expect(res.headers.get("cache-control")).toBe(
+      "public, max-age=300, s-maxage=300, stale-while-revalidate=300, stale-if-error=300",
+    );
     const body = await res.text();
     expect(body).toMatch(/view the full preview page/);
   });

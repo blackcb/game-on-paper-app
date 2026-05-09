@@ -25,6 +25,43 @@ logs = LogSetup()
 logs.init_app(app)
 
 
+def _warmup_models():
+    """Touch the heavy import + model-load machinery at app-import time
+    so the gunicorn master populates them once and forked workers
+    inherit via copy-on-write. Pairs with `--preload` in the
+    Dockerfile CMD; without `--preload` each worker repeats this work.
+
+    Idempotent + network-free: probes module-level XGBoost booster
+    globals on `sportsdataverse.cfb.cfb_pbp` if they exist (different
+    versions name them differently), but does not contact ESPN. Safe
+    to call from `/warmup` after startup as well.
+    """
+    try:
+        import xgboost  # noqa: F401
+        import pandas  # noqa: F401
+        import sportsdataverse.cfb.cfb_pbp as _cfb_pbp
+        # Probe likely module-level booster names. `getattr` with a
+        # default just touches the attribute; if `cfb_pbp` lazily
+        # builds a property on first access, this triggers it.
+        for attr in (
+            "ep_model", "wp_model", "qbr_model",
+            "_ep_model", "_wp_model", "_qbr_model",
+            "ep_final_model", "wp_final_model",
+        ):
+            getattr(_cfb_pbp, attr, None)
+        logging.getLogger("root").info(json.dumps({"event": "warmup_ok"}))
+    except Exception as exc:
+        # Never let warmup failure prevent the app from booting; the
+        # first real /cfb/process call will surface any genuine
+        # failure with a full traceback.
+        logging.getLogger("root").warning(
+            json.dumps({"event": "warmup_failed", "error": repr(exc)}),
+        )
+
+
+_warmup_models()
+
+
 @app.after_request
 def after_request(response):
     logger = logging.getLogger("app.access")
@@ -415,6 +452,20 @@ def process():
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
     return jsonify({"status": "ok"})
+
+
+@app.route("/warmup", methods=["GET"])
+def warmup():
+    """Heavier healthcheck: re-runs `_warmup_models()` so a cron-warm
+    ping from the Worker (Layer B in worker/src/lib/cron.ts) exercises
+    the XGBoost-load codepath, not just Flask's reply path. With
+    `--preload` the master already did this once at boot, so this is
+    a no-op the second time — but a fully-stopped container resumed
+    by a cron ping comes back through this route, and we want the
+    boosters in memory before the first real /cfb/process call lands.
+    """
+    _warmup_models()
+    return jsonify({"status": "ok", "warm": True})
 
 
 if __name__ == "__main__":
