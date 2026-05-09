@@ -3188,6 +3188,49 @@ don't get lost. Promote to a phase when one becomes urgent.
   deferred. Watch Workers Logs for a week post-fix to confirm no
   other drift signals appear before tightening to fail-closed.
 
+- **First-hit-per-PoP cost on `/cfb/game/:id` (~2.5s)** — surfaced
+  by the 2026-05-09 perf audit. After 28fe7b2 restored
+  `caches.default.match` at the route top, warm-cache TTFB on game
+  pages is ~60ms (LHCI: 38ms; cold-start probe: p50 60ms / p95
+  72ms). But `caches.default` is per-PoP — first hit per PoP still
+  pays the full Worker → Container → Python pipeline (~2.5s p50,
+  ~4s tail on big games like 401520222).
+
+  Cron-warm fires from a single CF region (currently ATL), so it
+  only warms one PoP's cache; users hitting other PoPs see the
+  cold path. Fix paths, in order of cost / blast radius:
+    1. Re-investigate Phase 2I Cache Rule. It was parked
+       2026-05-07 because `cf-cache-status` never appeared on
+       responses, but the diagnosis pre-dated the
+       `caches.default.match` revert and may have been confounded
+       by that. Worth a fresh look now.
+    2. Smart Tiered Cache pricing — was confirmed 2026-05-05 not
+       to engage on this account's plan. Re-check whether
+       enabling on a higher tier is cheaper than the additional
+       container compute we're paying.
+    3. Multi-region cron-warm — fire the prewarm self-fetch
+       from N PoPs instead of one. Cloudflare Workers can't
+       directly choose a PoP, but routing through Worker-to-Worker
+       calls or external tunnels could approximate this.
+  None of these are urgent — the cold-start mask + warm-hit fast
+  path covers the common cases. Promote when traffic patterns
+  show the per-PoP-cold tail is hitting real users (Workers Logs
+  + RUM data).
+
+- **Container miss-tail on big games (~4s vs 2.5s typical)** —
+  observed in the 2026-05-09 cold-start probe: gameId 401520222
+  consistently lands at ~3.4s `python;dur` vs ~2.2s for the
+  401403910/401520434 fixtures. The variance probably correlates
+  with play count (DataFrame size in the per-record reshape) but
+  isn't measured directly. Worth: (a) instrumenting `/cfb/process`
+  with row-count + box-score-size dimensions in the Server-Timing
+  header so we can fit `python;dur ≈ f(plays)`, and (b) profiling
+  the reshape on the slowest game to see if the long tail is
+  pandas-shaped or model-shaped. Touch when (i) the long tail
+  starts being visible to users, or (ii) we're considering
+  Phase 4 (Workers-native rewrite, requires understanding the
+  bottleneck first).
+
 - **Take ownership of the summary data pipeline (CFBD API key)** —
   3A.6b shipped option (A): mirror upstream `cfb-team-summaries`
   weekly via GH Action, extract data, rebuild slim image. That
