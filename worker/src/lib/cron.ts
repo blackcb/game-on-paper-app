@@ -107,6 +107,15 @@ function isActive(game: ScheduleEvent): boolean {
   );
 }
 
+// Completed games get a 1-year Cache-Control from src/index.tsx, so a
+// prewarm self-fetch is guaranteed to be a no-op cache hit. Filter
+// them out before slicing top-N — otherwise on a Saturday with only a
+// few active games, PREWARM_TOP_N=10 burns slots on already-cached
+// finals.
+function isCompleted(game: ScheduleEvent): boolean {
+  return game.status?.type?.completed === true;
+}
+
 // Rank: in-progress games first (most-volatile, most cache-pressure).
 // Otherwise preserve scoreboard order — ESPN tends to return upcoming
 // games sorted by start time, which is a sensible secondary key.
@@ -185,9 +194,8 @@ export async function prewarmTopGames(env: PrewarmEnv): Promise<void> {
     return;
   }
 
-  const sorted = games
-    .slice()
-    .sort((a, b) => rankForPrewarm(a) - rankForPrewarm(b));
+  const candidates = games.filter((g) => !isCompleted(g));
+  const sorted = candidates.sort((a, b) => rankForPrewarm(a) - rankForPrewarm(b));
   const top = sorted.slice(0, n).filter((g) => g.id != null);
 
   await Promise.all(

@@ -125,6 +125,32 @@ describe("prewarmTopGames", () => {
     }
   });
 
+  it("filters out completed games before slicing top-N", async () => {
+    // Completed games already have a 1y Cache-Control, so prewarming
+    // them is pure waste. With PREWARM_TOP_N=3 against a scoreboard
+    // of 2 completed + 1 scheduled, only the scheduled game fetches.
+    const games = [
+      { id: "final-1", status: { type: { name: "STATUS_FINAL", completed: true } } },
+      { id: "final-2", status: { type: { name: "STATUS_FINAL", completed: true } } },
+      { id: "scheduled", status: { type: { name: "STATUS_SCHEDULED" } } },
+    ];
+    await env.LEAGUE_DATA.put(SCOREBOARD_KV_KEY, JSON.stringify(games));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("ok"));
+
+    await prewarmTopGames({
+      LEAGUE_DATA: env.LEAGUE_DATA,
+      PREWARM_TOP_N: "3",
+      PREWARM_BASE_URL: "https://example.test",
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0]![0])).toBe(
+      "https://example.test/cfb/game/scheduled",
+    );
+  });
+
   it("ranks in-progress games above scheduled when picking top-N", async () => {
     const games = [
       { id: "scheduled-A", status: { type: { name: "STATUS_SCHEDULED" } } },
