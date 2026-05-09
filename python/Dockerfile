@@ -47,6 +47,19 @@ RUN find /opt/venv -depth -name __pycache__ -type d -exec rm -rf {} + 2>/dev/nul
 FROM python:3.14-slim
 WORKDIR /code
 
+# `python:3.14-slim` (bookworm-slim) doesn't ship `curl`, but the
+# droplet's docker-compose healthcheck (docker-compose.fork.yml)
+# is `curl --fail http://python:7000/healthcheck` executed inside
+# this container. Without curl the healthcheck fails as
+# command-not-found, the container never reports healthy, and
+# `node`'s `service_healthy: python` dependency aborts the deploy.
+# Pre-slim Dockerfile used `python:3.14` (full), which had curl
+# baked in; this restores that contract at ~3 MB cost. Goes away
+# in Phase 3E once fork-deploy.yml is archived.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy the venv directly. PATH points at it so `gunicorn` resolves.
 COPY --from=pybuilder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
