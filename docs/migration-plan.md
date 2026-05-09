@@ -3011,37 +3011,50 @@ Droplet still running as rollback fallback.
 
 #### 3E — Decommission droplet + Redis containers
 
-- ☐ Verify nothing in production points at the droplet
-  (`dig www.gameonpaper.com`, check Cloudflare DNS).
+- ☑ Verify nothing in production points at the droplet
+  (`dig sports.unseen-university.org`, check Cloudflare DNS).
+  **Done 2026-05-08**: dig returns Cloudflare-only IPs
+  (`172.67.158.176`, `104.21.82.149`, `2606:4700:303{3,4}::…`);
+  no droplet IP `137.184.138.84` exposed.
 - ☐ Stop the droplet (don't delete yet — keep as cold-storage rollback for
   1 week).
   > **USER ACTION**: Stop the droplet via DigitalOcean dashboard. Claude
   > shouldn't have DO API access.
 - ☐ One week later, after confirming stable production: destroy the
   droplet, delete the deploy SSH keys, archive the
-  `.github/workflows/deploy.yml` file (move to
-  `.github/workflows/deploy.yml.archived`).
-- ☐ Update [README.md](../README.md): remove "Make sure you have Docker
+  `.github/workflows/fork-deploy.yml` file (move to
+  `.github/workflows/fork-deploy.yml.archived`).
+  *(Note: the upstream `deploy.yml` was archived earlier; the
+  active rollback workflow is `fork-deploy.yml`.)*
+- ☑ Update [README.md](../README.md): remove "Make sure you have Docker
   installed... `docker compose up`" instructions; add new "Local dev:
   `cd worker && wrangler dev`" instructions.
+  **Done 2026-05-08**: rewritten with worker-first dev path; legacy
+  Docker stack kept as a transitional footnote until decommission.
 - ☐ Archive [docker-compose.yml](../docker-compose.yml) and
   [docker-compose.do.yml](../docker-compose.do.yml) to a
   `legacy/` directory or delete (git history preserves them).
+  *(Blocked: `fork-deploy.yml` still consumes `docker-compose.fork.yml`
+  during burn-in.)*
 - ☐ Delete the Redis Dockerfiles ([redis/Dockerfile.cache](../redis/Dockerfile.cache),
   [redis/Dockerfile.lru](../redis/Dockerfile.lru), and the .conf files).
-- ☐ Update [CLAUDE.md](../CLAUDE.md) to reflect the new architecture.
-- ☐ Tear down the test Workers and their orphaned container apps:
-  ```sh
-  cd worker-coldstart && wrangler delete                # if not already
-  cd worker && wrangler delete --config wrangler.perftest.toml
-  # `wrangler delete` removes the Worker but leaves the container
-  # app + running instances. List + delete each orphan explicitly:
-  wrangler containers list                               # find IDs
-  wrangler containers delete <id>                        # repeat per orphan
-  ```
-  Then delete the now-defunct test config files from the repo:
-  `worker/wrangler.perftest.toml`, `frontend/lighthouserc.perftest.json`,
-  and the `worker-coldstart/` directory.
+  *(Blocked: `fork-deploy.yml`'s build matrix still builds these.)*
+- ☑ Update [CLAUDE.md](../CLAUDE.md) to reflect the new architecture.
+  **Done 2026-05-08**: rewritten with Worker + Containers as primary;
+  burn-in transition note added covering legacy directories.
+- ☑ Tear down the test Workers and their orphaned container apps.
+  **Done 2026-05-08**: cloud teardown was performed manually by the
+  user (`wrangler delete sports-perftest`, `wrangler delete
+  gop-coldstart-test`, plus `wrangler containers delete <id>` for
+  each orphaned container app; `wrangler containers list` now shows
+  only `sports-pythoncontainer` and `sports-summarycontainer`).
+  Repo-side cleanup landed in the same pass: deleted
+  `worker/wrangler.perftest.toml`,
+  `frontend/lighthouserc.perftest.json`,
+  `frontend/.lighthouseci.perftest/` (20 stale Lighthouse artifacts),
+  and the entire `worker-coldstart/` directory; removed the
+  obsolete `BASE_URL=https://sports-perftest…` permission entry from
+  `.claude/settings.local.json`.
 
   Lesson learned 2026-05-08: deleting a Worker via `wrangler delete`
   does NOT cascade to its `[[containers]]` apps. Container instances
@@ -3050,6 +3063,33 @@ Droplet still running as rollback fallback.
   `wrangler delete gop-coldstart-test`, three container apps
   remained Active in `wrangler containers list` until manually
   deleted by ID.
+
+##### 3E execution log (2026-05-08)
+
+Non-destructive prep pass landed mid-burn-in (cutover declared
+03:08 UTC same day). Items completed:
+
+1. DNS verification on `sports.unseen-university.org` (Cloudflare-only
+   IPs, no droplet exposure).
+2. Test-Worker repo cleanup (cloud teardown was already done
+   manually by the user; this pass removed the leftover repo files
+   + Claude permission entry).
+3. CLAUDE.md rewritten: Worker + Containers as primary architecture,
+   transition note flagging the legacy droplet stack as rollback-only
+   until ~2026-05-17.
+4. README.md rewritten: `cd worker && wrangler dev` is the primary
+   local-dev path; legacy `docker compose` kept as a transitional
+   footnote.
+
+Items still gated on burn-in success + 1 week of stable production
+(target ~2026-05-17):
+
+- Stop droplet (USER ACTION, DigitalOcean dashboard).
+- Destroy droplet, archive `fork-deploy.yml`.
+- Archive `docker-compose*.yml`; delete `redis/Dockerfile.*` and
+  `redis/*.conf` — all gated on `fork-deploy.yml` going away first.
+- Second pass on CLAUDE.md + README.md to remove the transition
+  notes and legacy paragraphs.
 
 ### Acceptance
 
