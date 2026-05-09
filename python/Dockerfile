@@ -83,4 +83,14 @@ COPY app.py schemas.py flask_logs.py ./
 # - 120s timeout: cold game-page processing can run 5-6s on the
 #   slowest games; 120s is well above the long tail without masking
 #   genuine hangs.
-CMD ["gunicorn", "-w", "2", "-k", "gthread", "--threads", "8", "--timeout", "120", "-b", "0.0.0.0:7000", "app:app"]
+# - --preload: load app:app in the gunicorn master before fork()ing
+#   workers. Combined with _warmup_models() at app-import in app.py,
+#   this moves sportsdataverse + xgboost + booster loads from
+#   per-worker first-request cost (the bulk of the 14-19s cold-start
+#   tail measured in 3A.7) into one-shot startup cost. Workers
+#   inherit the loaded models via copy-on-write, so the first user
+#   request after a Cloudflare-Container resume hits an
+#   already-warm interpreter. Cloudflare doesn't route requests
+#   until ports are listening, so the user-visible cold-start
+#   collapses to roughly the gunicorn boot time.
+CMD ["gunicorn", "-w", "2", "-k", "gthread", "--threads", "8", "--timeout", "120", "--preload", "-b", "0.0.0.0:7000", "app:app"]

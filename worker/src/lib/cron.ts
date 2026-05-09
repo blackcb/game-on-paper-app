@@ -13,21 +13,26 @@ import type { PythonContainer, SummaryContainer } from "../containers";
 import { getCachedCurrentScoreboard } from "./schedule";
 import type { ScheduleEvent } from "./team_helpers";
 
-// Football gameday window in UTC. Saturday 15:00 UTC ≈ 11:00 EDT
-// (10:00 EST) — early-window slates ramp up by then. Window stays
-// open until Sunday 08:00 UTC ≈ 04:00 EDT (03:00 EST), covering the
-// late-night Pac-12 / Hawaii kickoffs that finish past midnight ET.
+// Football gameday window in UTC. Two segments:
+//   - Saturday 15:00 UTC → Sunday 08:00 UTC: full Saturday slate +
+//     late-night Pac-12 / Hawaii kickoffs.
+//   - Tuesday–Friday 22:00 UTC → next-day 04:00 UTC: weekday evening
+//     kickoffs (MAC midweeks, Thu/Fri primetime). 22 UTC ≈ 18 ET.
+//     Added 2026-05-09 to close the gap SEASON-MODES.md promised
+//     for `normal` mode but `isGameWindow` didn't actually cover.
 //
-// Off-window the cron-warm calls don't fire — overnight Saturday and
-// all of Sunday-through-Friday rely on `sleepAfter` alone. Weekday
-// midweek games (Tue–Fri evenings during conference play) are out
-// of scope for this first pass; revisit if logs show traffic
-// pattern + cold-start hits warrant it.
+// Off-window the cron-warm calls don't fire — Mon + Sun afternoons
+// + early-morning hours rely on `sleepAfter` alone.
 export function isGameWindow(now: Date = new Date()): boolean {
   const day = now.getUTCDay(); // 0=Sun, 6=Sat
   const hour = now.getUTCHours();
+  // Saturday slate.
   if (day === 6 && hour >= 15) return true;
   if (day === 0 && hour < 8) return true;
+  // Weekday primetime: Tue–Fri 22:00 UTC opens; Wed–Sat 04:00 UTC closes.
+  // (i.e., the evening of day D extends into the early hours of D+1.)
+  if (day >= 2 && day <= 5 && hour >= 22) return true;
+  if (day >= 3 && day <= 6 && hour < 4) return true;
   return false;
 }
 
@@ -39,7 +44,20 @@ export interface CronWarmEnv {
   SUMMARY_CONTAINER?: DurableObjectNamespace<SummaryContainer>;
 }
 
-async function pingContainer<T extends PythonContainer | SummaryContainer>(
+// Per-container warmup path. Python has a heavier `/warmup` route
+// (added 2026-05-09) that exercises CFBPlayProcess + XGBoost model
+// loads, so a cron-resumed container has the boosters in memory
+// before the first user request. The summary container has no
+// equivalent model-load cost, so a plain `/healthcheck` suffices.
+function warmupPath(name: string): string {
+  return name === "python" ? "/warmup" : "/healthcheck";
+}
+
+// Exported (2026-05-09) so `renderScoreboard` and the pregame branch
+// in `src/index.tsx` can fire opportunistic background warms via
+// `ctx.waitUntil(pingContainer(...))` — same mechanism as the cron
+// path, just triggered by entry-page traffic instead of a schedule.
+export async function pingContainer<T extends PythonContainer | SummaryContainer>(
   binding: DurableObjectNamespace<T> | undefined,
   name: string,
 ): Promise<void> {
@@ -50,7 +68,7 @@ async function pingContainer<T extends PythonContainer | SummaryContainer>(
   const start = Date.now();
   try {
     const stub = getContainer(binding);
-    const res = await stub.fetch("http://container/healthcheck");
+    const res = await stub.fetch(`http://container${warmupPath(name)}`);
     console.log(
       JSON.stringify({
         event: "cron_warm",

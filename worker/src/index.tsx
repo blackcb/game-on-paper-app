@@ -59,7 +59,7 @@ import {
 import { TrendsPage } from "./templates/Trends";
 import { time, timingMiddleware } from "./lib/timing";
 import { pythonBackend, summaryBackend } from "./lib/backends";
-import { isGameWindow, pingContainers, prewarmTopGames } from "./lib/cron";
+import { isGameWindow, pingContainer, pingContainers, prewarmTopGames } from "./lib/cron";
 import { PythonContainer, SummaryContainer } from "./containers";
 
 // Re-export the Container DO subclasses so wrangler can find them
@@ -205,6 +205,23 @@ async function renderScoreboard(
     // scheduled." path.
   }
   const scoreboard = prepareGameList(games);
+
+  // Opportunistic Python container warm (2026-05-09 cold-start mask).
+  // A user landing on the scoreboard is statistically about to click
+  // into a game page — fire-and-forget a warmup ping so the Python
+  // container is being resumed during the user's reading time. Gated
+  // on CRON_WARM_ENABLED so the same kill-switch that disables Layer
+  // B also disables this. `hasActiveGames` filters the case where the
+  // user is browsing a quiet historical week — no click-through worth
+  // warming for.
+  if (
+    c.env.CRON_WARM_ENABLED === "1" &&
+    c.env.PYTHON_CONTAINER &&
+    hasActiveGames(scoreboard)
+  ) {
+    c.executionCtx.waitUntil(pingContainer(c.env.PYTHON_CONTAINER, "python"));
+  }
+
   return c.html(
     <ScoreboardPage
       scoreboard={scoreboard}
@@ -522,7 +539,14 @@ const CACHE_CONTROL = {
   // container call — without stale-if-error that surfaces as a
   // user-facing error; with it, the user gets the stale cached
   // response while the cache transparently retries.
-  completed: "public, max-age=86400, s-maxage=31536000, stale-if-error=86400",
+  //
+  // Post-droplet cold-start mask (2026-05-09): `stale-while-revalidate`
+  // hides the much more common case where a PoP's cache LRU evicts an
+  // entry and the next user lands on a cold container. Completed-game
+  // bytes are static, so SWR is semantically a no-op — the background
+  // refresh produces an identical body — but the user gets the cached
+  // response instantly while the container warms.
+  completed: "public, max-age=86400, s-maxage=31536000, stale-while-revalidate=86400, stale-if-error=86400",
   // In-progress: very short — the page auto-refreshes every
   // minute anyway. 30 s lets back-to-back requests collapse
   // without staling the live game.
@@ -544,7 +568,15 @@ const CACHE_CONTROL = {
   // pre-kickoff but we don't want to outlive the actual kickoff
   // moment (which would silently keep serving "scheduled" past the
   // real start).
-  pregame: "public, max-age=300, s-maxage=300",
+  //
+  // Post-droplet cold-start mask (2026-05-09): SWR + stale-if-error
+  // matched to the 5-min TTL. Pregame hits the summary container
+  // (matchup percentiles + team breakdowns); a PoP cache miss right
+  // before kickoff can land on a cold summary container. SWR gives
+  // the cached response instantly while the refresh runs in the
+  // background. Capped at 300 s so the stale window can't outlive
+  // an actual kickoff state transition.
+  pregame: "public, max-age=300, s-maxage=300, stale-while-revalidate=300, stale-if-error=300",
   // Quarantine entries are static (fork-maintained list); 1 day
   // matches the Express side's gut feel.
   quarantine: "public, max-age=86400, s-maxage=86400",
@@ -664,6 +696,15 @@ app.get("/cfb/game/:gameId", async (c) => {
     previewMode === "new";
 
   if (isScheduled && homeTeam?.id != null && awayTeam?.id != null) {
+    // Opportunistic Python container warm (2026-05-09 cold-start mask).
+    // User viewing a pregame is likely to come back at kickoff — by
+    // then this PoP's cache may have expired (5-min pregame TTL) and
+    // the container may be cold. Warm now so the kickoff hit lands on
+    // a hot container. Same kill-switch as scoreboard warm (#5).
+    if (c.env.CRON_WARM_ENABLED === "1" && c.env.PYTHON_CONTAINER) {
+      c.executionCtx.waitUntil(pingContainer(c.env.PYTHON_CONTAINER, "python"));
+    }
+
     // Pregame: pull both teams' summary breakdowns in parallel.
     // Capture IDs before the time() closure so TS keeps the
     // non-null narrowing through the callback.
