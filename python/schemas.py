@@ -191,10 +191,19 @@ class ProcessResponse(BaseModel):
     Required: id, count, plays. Everything else is Optional because
     individual ESPN payloads can be missing fields (broadcasts, videos,
     standings) for unusual game states.
+
+    `id` is echoed straight from the request body's `gameId` without
+    coercion (app.py: `result["id"] = body.get("gameId")`), so the
+    type matches whatever the caller sent. Worker callers send string
+    (URL path segment from `/cfb/game/:gameId`), the integration test
+    sends int. Both shapes are valid; the original `id: int`
+    declaration was wrong and produced spurious
+    `schema_validation_failure` events on every Worker request after
+    the 3D cutover.
     """
 
     model_config = _ALLOW_EXTRA
-    id: int
+    id: int | str
     count: int
     plays: list[Play]
     box_score: Any = None
