@@ -63,7 +63,10 @@ constraints = { regions = ["ENAM", "WNAM"] }
 
 [[containers]]
 class_name = "SummaryContainer"
-image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-summary:slim"
+# Must match wrangler.toml's tag — see SIGTERM-fix note there. Once
+# burn-in passes and the fix is retagged to `:slim`, update all three
+# season profiles in lockstep.
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-summary:slim-sigterm-fix"
 max_instances = 5
 instance_type = "standard-2"
 constraints = { regions = ["ENAM", "WNAM"] }
