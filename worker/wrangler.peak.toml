@@ -56,7 +56,10 @@ PREWARM_BASE_URL = "https://sports.unseen-university.org"
 
 [[containers]]
 class_name = "PythonContainer"
-image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim"
+# Must match wrangler.toml's tag — see cold-start-mask note there. Once
+# validated through a Saturday slate and retagged to `:slim`, update
+# all three season profiles in lockstep.
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim-coldstart-mask"
 max_instances = 10
 instance_type = "standard-2"
 constraints = { regions = ["ENAM", "WNAM"] }

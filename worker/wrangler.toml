@@ -132,7 +132,14 @@ PREWARM_BASE_URL = "https://sports.unseen-university.org"
 # tags (`gop-python:slim`, `gop-summary:slim`) come from 3A.6 / 3A.6b.
 [[containers]]
 class_name = "PythonContainer"
-image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim"
+# 2026-05-09 cold-start mask: gunicorn `--preload` + `_warmup_models()`
+# at app-import + `/warmup` route. See python/Dockerfile + python/app.py.
+# `:slim-coldstart-mask` is a unique tag so wrangler picks up the new
+# digest at deploy time — pushing to `:slim` would leave CF referencing
+# the old digest (same lesson as the SIGTERM fix). Once the cold-start
+# mask is validated through a Saturday slate, retag to `:slim` and
+# squash this comment.
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim-coldstart-mask"
 max_instances = 5
 instance_type = "standard-2"
 constraints = { regions = ["ENAM", "WNAM"] }
