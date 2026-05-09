@@ -820,7 +820,7 @@
     }
   },
   "additionalProperties": true,
-  "description": "The /cfb/process response on success.\n\nRequired: id, count, plays. Everything else is Optional because\nindividual ESPN payloads can be missing fields (broadcasts, videos,\nstandings) for unusual game states.",
+  "description": "The /cfb/process response on success.\n\nRequired: id, count, plays. Everything else is Optional because\nindividual ESPN payloads can be missing fields (broadcasts, videos,\nstandings) for unusual game states.\n\n`id` is echoed straight from the request body's `gameId` without\ncoercion (app.py: `result[\"id\"] = body.get(\"gameId\")`), so the\ntype matches whatever the caller sent. Worker callers send string\n(URL path segment from `/cfb/game/:gameId`), the integration test\nsends int. Both shapes are valid; the original `id: int`\ndeclaration was wrong and produced spurious\n`schema_validation_failure` events on every Worker request after\nthe 3D cutover.",
   "properties": {
     "awayTeamId": {
       "anyOf": [
@@ -910,8 +910,15 @@
       "title": "Hometeamspread"
     },
     "id": {
-      "title": "Id",
-      "type": "integer"
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "title": "Id"
     },
     "overUnder": {
       "default": null,
