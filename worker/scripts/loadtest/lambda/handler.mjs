@@ -20,7 +20,11 @@
 // 17 viewers × ~120 KB each ≈ 2 MB.
 
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { runDriver } from "../driver.mjs";
+// `./driver.mjs` because terraform's archive_file flattens
+// scripts/loadtest/driver.mjs and scripts/loadtest/lambda/handler.mjs
+// into the same /var/task/ directory in the Lambda zip — the relative
+// path resolves at Lambda runtime, not at git-checkout layout.
+import { runDriver } from "./driver.mjs";
 
 const s3 = new S3Client({});
 

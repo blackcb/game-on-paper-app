@@ -33,15 +33,14 @@ terraform {
 }
 
 variable "regions" {
-  description = "AWS regions to deploy a driver Lambda into. Picked for US PoP coverage on Cloudflare's anycast: IAD, ORD, SJC/SFO, SEA, DFW. Add ca-central-1 (YYZ) if you want north-of-the-border."
+  description = "AWS regions to deploy a driver Lambda into. Picked for US PoP coverage on Cloudflare's anycast. AWS doesn't have a Dallas region (us-east-2 Ohio is the closest CF-PoP-aligned option), so DFW won't be exercised — that's an acceptable gap; for a US-centric audience the existing 5 cover ~85% of viewers."
   type        = list(string)
   default = [
     "us-east-1",   # N. Virginia → IAD PoP
     "us-east-2",   # Ohio → ORD/CMH
     "us-west-1",   # N. California → SJC
     "us-west-2",   # Oregon → SEA/PDX
-    "us-south-1",  # Dallas → DFW (some accounts only; adjust if unavailable)
-    "ca-central-1" # Montreal → YUL/YYZ (Canadian POP, but useful for "outside the US" comparison)
+    "ca-central-1" # Montreal → YUL/YYZ (Canadian PoP, but routes to a different upper-tier than the US ones, useful for "outside the US" comparison)
   ]
 }
 
@@ -86,10 +85,6 @@ provider "aws" {
 provider "aws" {
   alias  = "us_west_2"
   region = "us-west-2"
-}
-provider "aws" {
-  alias  = "us_south_1"
-  region = "us-south-1"
 }
 provider "aws" {
   alias  = "ca_central_1"
@@ -256,24 +251,6 @@ resource "aws_lambda_function" "driver_us_west_1" {
 
 resource "aws_lambda_function" "driver_us_west_2" {
   provider         = aws.us_west_2
-  function_name    = local.lambda_common.function_name
-  role             = local.lambda_common.role
-  handler          = local.lambda_common.handler
-  runtime          = local.lambda_common.runtime
-  timeout          = local.lambda_common.timeout
-  memory_size      = local.lambda_common.memory_size
-  filename         = local.lambda_common.filename
-  source_code_hash = local.lambda_common.source_code_hash
-  environment {
-    variables = local.lambda_common.environment
-  }
-}
-
-// us-south-1 (Dallas) is not available in all accounts. Comment out
-// this block if your account doesn't have it enabled — it costs an
-// IAM error at apply time, not a Lambda failure.
-resource "aws_lambda_function" "driver_us_south_1" {
-  provider         = aws.us_south_1
   function_name    = local.lambda_common.function_name
   role             = local.lambda_common.role
   handler          = local.lambda_common.handler

@@ -58,11 +58,20 @@ for REGION in ${REGIONS}; do
   (
     OUT=$(mktemp)
     set -e
+    # `--cli-read-timeout 0` disables aws CLI's default ~60s read
+    # timeout. Without it, sync invocations of long-running Lambdas
+    # (>60s) drop the connection client-side even though the Lambda
+    # keeps running on the AWS side. The 850s run length blows past
+    # that limit; setting 0 = wait forever.
+    # `--cli-connect-timeout 60` keeps the *initial* connect timeout
+    # short so a wedged region surfaces quickly instead of hanging.
     aws lambda invoke \
       --region "${REGION}" \
       --function-name "${FUNCTION_NAME}" \
       --invocation-type RequestResponse \
       --cli-binary-format raw-in-base64-out \
+      --cli-read-timeout 0 \
+      --cli-connect-timeout 60 \
       --payload "${PAYLOAD}" \
       "${OUT}" >/dev/null
     echo "[${REGION}] $(cat "${OUT}")"
