@@ -3084,12 +3084,84 @@ Non-destructive prep pass landed mid-burn-in (cutover declared
 Items still gated on burn-in success + 1 week of stable production
 (target ~2026-05-17):
 
-- Stop droplet (USER ACTION, DigitalOcean dashboard).
-- Destroy droplet, archive `fork-deploy.yml`.
+- ~~Stop droplet (USER ACTION, DigitalOcean dashboard).~~ **AMENDED
+  2026-05-10**: droplet stays up indefinitely as the public origin
+  for the Architecture B fetch+cf path. See Phase 3F below.
+- ~~Destroy droplet, archive `fork-deploy.yml`.~~ **AMENDED**: don't
+  destroy. `fork-deploy.yml` can be slimmed to only deploy Python
+  (skip frontend/redis/caddy build steps), but the workflow stays
+  active so Python gets updated on push.
 - Archive `docker-compose*.yml`; delete `redis/Dockerfile.*` and
-  `redis/*.conf` — all gated on `fork-deploy.yml` going away first.
+  `redis/*.conf`. **Still pending** but no longer blocks droplet
+  decommission (which itself is no longer happening); slim
+  `fork-deploy.yml` first so it stops consuming these files,
+  then archive.
 - Second pass on CLAUDE.md + README.md to remove the transition
-  notes and legacy paragraphs.
+  notes and legacy paragraphs. **Partially landed 2026-05-10**:
+  CLAUDE.md updated to reflect droplet-stays-up-as-Python-origin.
+
+#### 3F — Architecture B: tiered cache for /cfb/game/:gameId (DONE 2026-05-10)
+
+The 2D-discovered constraint that `caches.default` is per-PoP, and
+the §2I attempt at a Cache Rule that didn't engage on Workers-routed
+requests, both motivated a third approach: change the *upstream*
+fetch shape so that CF's standard cache + Smart Tiered Cache pools
+the JSON response across PoPs.
+
+**Concrete change** (see [migrate-to-tiered-cache.md](migrate-to-tiered-cache.md)):
+
+- New `fetchAndShapePBPTiered(env, gameId, metadata)` in
+  `worker/src/lib/games.ts`. Calls
+  `fetch("${PYTHON_BASE_URL}/cfb/process?gameId=X", {cf:{cacheEverything:true,
+  cacheTtlByStatus:{"200-299":30,"404":1,"500-599":0}}})`. The JSON
+  response participates in the standard cache + tiered cache.
+- `/cfb/process` got a GET variant (existed only as POST before) so
+  the URL alone is the cache key. POST stayed for backward
+  compatibility with the service-binding callers.
+- `PYTHON_FETCH_MODE` env var dispatches between the old service-
+  binding path (`"service"`) and the new tiered path (`"tiered"`).
+  Production cut over to `"tiered"` 2026-05-10.
+- Worker's per-PoP `caches.default` for the rendered HTML stays in
+  place — that's still the fastest warm path.
+- `x-fetch-mode` and `x-upstream-cache` response headers added for
+  observability during cutover.
+
+**Justification — load-test data** (see
+[worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md](../worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md)):
+
+5-region × 17-viewer × 14-min run produced:
+- A (`caches.default` only): p99 = 783 ms, 16.6% upstream rate, with
+  a 2-3× p99 cliff in western PoPs.
+- B (fetch+cf tiered): p99 = 389 ms, 9.3% upstream rate, p99 uniform
+  across PoPs.
+- D (legacy droplet, no edge cache): p99 = 566 ms, 100% upstream.
+
+At game-day scale (50 PoPs, 50 k viewers): A burns ~17× more Python
+compute than B for the same audience because origin load on A scales
+linearly with PoP count, while B's stays constant.
+
+**Constraint introduced**: the public Python URL
+(`python.unseen-university.org`) is the tiered-cache origin. CF
+Containers don't expose public URLs natively, so the droplet has to
+stay up. Phase 3E amended above to reflect this. To take the
+droplet down later, either:
+1. Add a Worker proxy in front of the Python Container (extra Worker
+   invocation per cache miss).
+2. Roll back to Architecture A by flipping `PYTHON_FETCH_MODE` to
+   `"service"`.
+
+**Rollback path**: edit
+`worker/wrangler.toml` `PYTHON_FETCH_MODE = "service"` and
+`wrangler deploy`. ~30 seconds.
+
+**Cleanup pending** (deferred, ~1 week post-cutover):
+- Remove the `service` branch from `fetchAndShapePBP`.
+- Remove the `containerFetch` path from `lib/backends.ts`.
+- Decide whether to keep the Python Container at all — if rollback
+  is no longer wanted, the Container's DO binding goes away and
+  `wrangler containers delete` drops the Python Container.
+- Slim `fork-deploy.yml` to only deploy Python (drop the
+  frontend/redis/caddy matrix entries).
 
 ### Acceptance
 
