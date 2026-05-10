@@ -38,7 +38,18 @@ import { runDriver } from "./driver.mjs";
 const BUCKET_REGION = process.env.LOADTEST_BUCKET_REGION ?? "us-east-1";
 const s3 = new S3Client({ region: BUCKET_REGION });
 
-export const handler = async (event = {}) => {
+export const handler = async (event = {}, context) => {
+  // Lambda's runtime, by default, waits for the Node event loop to
+  // drain before returning. After 850 s of fetch() calls, undici's
+  // keepalive sockets keep the loop busy even after runDriver()
+  // resolves — the function then hits the 900 s hard timeout instead
+  // of returning cleanly with the data. First v3 run caught this:
+  // every region timed out at exactly 900 s, no log output, no S3
+  // PUT, runs all dropped on the floor. Setting this flag tells the
+  // runtime to return as soon as the handler's promise resolves and
+  // not wait on lingering sockets.
+  if (context) context.callbackWaitsForEmptyEventLoop = false;
+
   const region = process.env.AWS_REGION ?? event.region ?? "unknown";
   const lines = [];
   const emit = (line) => lines.push(JSON.stringify(line));
