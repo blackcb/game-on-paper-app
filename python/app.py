@@ -210,14 +210,31 @@ def process_replay():
     return response, 200
 
 
-@app.route("/cfb/process", methods=["POST"])
+@app.route("/cfb/process", methods=["GET", "POST"])
 def process():
+    """Per-game PBP processor.
+
+    POST is the historical interface — gameId in JSON body. GET is
+    new (2026-05-10) for the Architecture B migration: gameId in
+    query string. The Worker's tiered-cache fetch path needs GET
+    because Cloudflare's standard cache + tiered cache key on URL,
+    and POST bodies don't differentiate cache entries without
+    Enterprise-only `cf.cacheKey` customization.
+
+    Both methods produce identical responses; the only difference
+    is where gameId is parsed from. Existing callers (Worker
+    service-binding path, droplet's Express/Flask shim) keep using
+    POST with no behavior change.
+    """
     request_start = time.perf_counter()
     timings = {}
     gameId = None
     try:
-        body = request.get_json(force=True) or {}
-        gameId = body.get("gameId")
+        if request.method == "GET":
+            gameId = request.args.get("gameId")
+        else:
+            body = request.get_json(force=True) or {}
+            gameId = body.get("gameId")
         if not gameId:
             timings["total"] = time.perf_counter() - request_start
             _emit_metrics(timings, gameId, 404, error="missing_gameId")

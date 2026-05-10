@@ -142,7 +142,7 @@ class_name = "PythonContainer"
 # fix). Once the cold-start mask is validated through a Saturday slate
 # and the load-test harness is no longer needed, retag to `:slim` and
 # squash this comment.
-image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim-coldstart-replay"
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim-coldstart-replay-get"
 max_instances = 5
 instance_type = "standard-2"
 constraints = { regions = ["ENAM", "WNAM"] }
