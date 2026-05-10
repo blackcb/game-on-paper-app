@@ -134,12 +134,15 @@ PREWARM_BASE_URL = "https://sports.unseen-university.org"
 class_name = "PythonContainer"
 # 2026-05-09 cold-start mask: gunicorn `--preload` + `_warmup_models()`
 # at app-import + `/warmup` route. See python/Dockerfile + python/app.py.
-# `:slim-coldstart-mask` is a unique tag so wrangler picks up the new
-# digest at deploy time — pushing to `:slim` would leave CF referencing
-# the old digest (same lesson as the SIGTERM fix). Once the cold-start
-# mask is validated through a Saturday slate, retag to `:slim` and
+# 2026-05-10: added `/cfb/process/replay` (synthetic-in-progress endpoint
+# for the load-test harness in worker/scripts/loadtest/) and the captured
+# fixtures it reads from. `:slim-coldstart-replay` is a unique tag so
+# wrangler picks up the new digest at deploy time — pushing to `:slim`
+# would leave CF referencing the old digest (same lesson as the SIGTERM
+# fix). Once the cold-start mask is validated through a Saturday slate
+# and the load-test harness is no longer needed, retag to `:slim` and
 # squash this comment.
-image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim-coldstart-mask"
+image = "registry.cloudflare.com/ebe521cb5b561683303b77d32e240ba4/gop-python:slim-coldstart-replay"
 max_instances = 5
 instance_type = "standard-2"
 constraints = { regions = ["ENAM", "WNAM"] }

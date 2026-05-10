@@ -13,6 +13,7 @@ import {
 import {
   QUARANTINE_LIST,
   fetchAndShapePBP,
+  fetchAndShapePBPLoadTest,
   probeEspnPbp,
   type EspnPbpEnvelope,
   type ProcessedGameData,
@@ -611,11 +612,164 @@ function cachedJson(body: unknown, cacheControl: string): Response {
   });
 }
 
+// Load-test branch sentinel. When `?replay=<unix_ts>` is present on a
+// /cfb/game/:gameId request, the handler routes through
+// `fetchAndShapePBPLoadTest` instead of the production pipeline:
+//
+//   - Skips the ESPN STATUS probe (replay always returns
+//     STATUS_IN_PROGRESS until elapsed >= duration, then
+//     STATUS_FINAL — the Worker's pregame branch is never the
+//     correct call here).
+//   - Skips the quarantine check (synthetic fixtures are by
+//     definition not quarantined).
+//   - Reads `?arch=` to pick Architecture A (caches.default +
+//     service-binding) vs Architecture B (fetch+cf via public URL).
+//   - Reads `?replay_duration=` (default 1800) for fixture wallclock
+//     mapping.
+//
+// Production traffic does not pass these query params, so the
+// production code path below is unaffected. See worker/scripts/
+// loadtest/README.md for the harness end-to-end story.
+async function serveLoadTestGame(
+  c: Context,
+  gameId: string,
+  isJsonShortcut: boolean,
+  replayStartedAt: number,
+): Promise<Response> {
+  const arch = c.req.query("arch") === "tiered" ? "tiered" : "baseline";
+  const replayDuration = parseFloat(
+    c.req.query("replay_duration") ?? "1800",
+  ) || 1800;
+
+  // Architecture A's caches.default fast path. Mirror the production
+  // route's wrap so the harness measures the same shape production
+  // would see during a live in-progress game. Skipped under arch=tiered
+  // (the cache layer for B lives inside the fetch+cf, not in the Worker).
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  if (arch === "baseline") {
+    const cached = await cache.match(cacheKey);
+    if (cached != null) {
+      const headers = new Headers(cached.headers);
+      headers.set("x-worker-cache", "HIT");
+      headers.set("x-arch", "baseline");
+      return new Response(cached.body, {
+        status: cached.status,
+        statusText: cached.statusText,
+        headers,
+      });
+    }
+  }
+
+  let data: ProcessedGameData;
+  try {
+    data = await time(c, "loadtest_pbp", () =>
+      fetchAndShapePBPLoadTest(gameId, {
+        python: arch === "baseline" ? pythonBackend(c.env) : undefined,
+        cached: arch === "tiered"
+          ? {
+              baseUrl: c.env.PYTHON_BASE_URL,
+              secret: c.env.WORKER_SHARED_SECRET,
+              // Match the in-progress / completed CACHE_CONTROL TTLs.
+              // 30 s in-progress lines up with caches.default's branch
+              // for arch=baseline so the two architectures see the
+              // same TTL pressure during a run.
+              cacheTtlInProgress: 30,
+              cacheTtlCompleted: 86400,
+            }
+          : undefined,
+        replay: { startedAt: replayStartedAt, duration: replayDuration },
+      }),
+    );
+  } catch (err) {
+    console.log(
+      JSON.stringify({
+        event: "loadtest_failure",
+        gameId,
+        arch,
+        error: (err as Error).message,
+      }),
+    );
+    return new Response(
+      JSON.stringify({ status: "bad", message: (err as Error).message }),
+      { status: 502, headers: { "content-type": "application/json", "x-arch": arch } },
+    );
+  }
+
+  const completed = data.gameInfo?.status?.type?.completed === true;
+  const cacheControl = completed ? CACHE_CONTROL.completed : CACHE_CONTROL.inProgress;
+
+  if (isJsonShortcut) {
+    const response = new Response(JSON.stringify(data), {
+      headers: {
+        "content-type": "application/json",
+        "cache-control": cacheControl,
+        "x-arch": arch,
+      },
+    });
+    if (arch === "baseline") {
+      c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+    }
+    return response;
+  }
+
+  const headerSeason = data.header?.season?.year ?? CURRENT_SEASON;
+  const clamped = clampSeason(headerSeason);
+  let percentiles: Array<Record<string, unknown>> = [];
+  try {
+    percentiles = await time(c, "percentiles", async () =>
+      (await retrievePercentiles(summaryCfg(c), clamped, null)) as Array<
+        Record<string, unknown>
+      >,
+    );
+  } catch (err) {
+    console.log(
+      JSON.stringify({
+        event: "loadtest_percentiles_failure",
+        gameId,
+        error: (err as Error).message,
+      }),
+    );
+  }
+  const html = await time(c, "render", async () =>
+    (
+      <GamePage
+        gameData={data as unknown as RenderableGameData}
+        percentiles={percentiles}
+        season={clamped}
+      />
+    ).toString(),
+  );
+  const response = new Response(html, {
+    headers: {
+      "content-type": "text/html; charset=UTF-8",
+      "cache-control": cacheControl,
+      "x-arch": arch,
+    },
+  });
+  if (arch === "baseline") {
+    c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  }
+  return response;
+}
+
 app.get("/cfb/game/:gameId", async (c) => {
   const gameId = c.req.param("gameId");
   const isJsonShortcut =
     c.req.query("json") === "true" || c.req.query("json") === "1";
   const previewMode = c.req.query("preview_mode");
+
+  // Load-test gate. Activated by `?replay=<unix_ts>`. Production
+  // traffic doesn't carry this query string, so this branch is dead
+  // for normal users. See `serveLoadTestGame` and worker/scripts/
+  // loadtest/README.md.
+  const replayRaw = c.req.query("replay");
+  if (replayRaw != null && replayRaw !== "") {
+    const startedAt = parseFloat(replayRaw);
+    if (Number.isFinite(startedAt)) {
+      return serveLoadTestGame(c, gameId, isJsonShortcut, startedAt);
+    }
+  }
 
   // Cache layer for /cfb/game/*: per-PoP `caches.default`,
   // populated by the Worker on render and read at the top of this

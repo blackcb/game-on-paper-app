@@ -69,7 +69,11 @@ ENV PYTHONUNBUFFERED=1
 # Whitelisted source copy — `.dockerignore` excludes tests/, .venv,
 # scripts/, __pycache__, etc., but listing files explicitly keeps
 # the runtime image deterministic regardless of directory state.
-COPY app.py schemas.py flask_logs.py ./
+COPY app.py schemas.py flask_logs.py replay.py ./
+# Captured /cfb/process responses for synthetic-replay (load-test).
+# Same path the test snapshot fixtures live at, so replay.py's
+# default fixture dir works in both `pytest` and the container.
+COPY tests/fixtures ./tests/fixtures
 
 # Production WSGI server. Two gthread workers, 8 threads each.
 # - Worker count: the python container has a 4 GB memory cap; pandas

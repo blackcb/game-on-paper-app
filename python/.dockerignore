@@ -10,6 +10,13 @@ __pycache__/
 # Test code is not used at runtime; integration tests hit real APIs
 # and would inflate the image and slow `docker build` cache misses.
 tests/
+# …but fixtures ARE used at runtime by /cfb/process/replay (the
+# load-test synthetic-in-progress endpoint). The negation re-includes
+# the captured fixture trees while keeping conftest.py / test_*.py
+# excluded. ~15 MB total across 3 games — acceptable for a load-test
+# affordance, since Cloudflare Containers don't support volume mounts.
+!tests/fixtures/
+!tests/fixtures/**
 
 # Tooling that builds fixtures or schemas — used out-of-band.
 scripts/

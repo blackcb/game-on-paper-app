@@ -134,6 +134,82 @@ def _server_timing_header(timings):
     return ", ".join(f"{k};dur={int(v * 1000)}" for k, v in timings.items())
 
 
+from replay import load_replay_fixture, truncate_replay  # noqa: E402
+
+_REPLAY_FIXTURE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "tests", "fixtures"
+)
+_REPLAY_FIXTURE_CACHE: dict = {}
+
+
+@app.route("/cfb/process/replay", methods=["GET", "POST"])
+def process_replay():
+    """Synthetic in-progress endpoint for load-test harness use.
+
+    Query params (or POST JSON body — both accepted so the same handler
+    serves Architecture A's service-binding POST and Architecture B's
+    fetch+cf GET):
+      - gameId: which captured fixture to replay (must exist in
+        python/tests/fixtures/<gameId>/expected.json)
+      - replay_started_at: unix-seconds timestamp the synthetic game
+        started. Required.
+      - replay_duration: seconds of wallclock for the full game (default
+        1800 = 30 min, matches the harness run length).
+
+    The response is shape-compatible with /cfb/process. No ESPN calls,
+    no XGBoost, no pandas pipeline — synthetic replay reads a cached
+    fixture, slices the plays array, and patches status. Sub-millisecond
+    on the warm path, so it isolates cache/network behavior from
+    Python-compute behavior in load tests.
+
+    NOT for production traffic. Bound by the same shared-secret check
+    as /cfb/process when fronted by Caddy on the droplet.
+    """
+    request_start = time.perf_counter()
+    timings = {}
+    if request.method == "POST":
+        body = request.get_json(force=True, silent=True) or {}
+    else:
+        body = {}
+
+    def _param(name, default=None):
+        if name in request.args:
+            return request.args.get(name)
+        return body.get(name, default)
+
+    gameId = _param("gameId")
+    started_at_raw = _param("replay_started_at")
+    duration_raw = _param("replay_duration", 1800)
+
+    if not gameId or started_at_raw is None:
+        return jsonify({"status": "bad", "message": "gameId and replay_started_at required"}), 400
+    try:
+        started_at = float(started_at_raw)
+        duration_s = float(duration_raw)
+    except (TypeError, ValueError):
+        return jsonify({"status": "bad", "message": "replay_started_at and replay_duration must be numeric"}), 400
+
+    fixture = load_replay_fixture(_REPLAY_FIXTURE_DIR, gameId, _REPLAY_FIXTURE_CACHE)
+    if fixture is None:
+        return jsonify({
+            "status": "bad",
+            "message": f"no replay fixture for gameId={gameId}",
+        }), 404
+
+    elapsed_s = time.time() - started_at
+    t0 = time.perf_counter()
+    truncated, play_index = truncate_replay(fixture, elapsed_s, duration_s)
+    timings["replay_truncate"] = time.perf_counter() - t0
+    timings["total"] = time.perf_counter() - request_start
+
+    response = jsonify(truncated)
+    response.headers["Server-Timing"] = _server_timing_header(timings)
+    response.headers["X-Replay-Play-Index"] = str(play_index)
+    response.headers["X-Replay-Elapsed-S"] = f"{elapsed_s:.1f}"
+    _emit_metrics(timings, gameId, 200)
+    return response, 200
+
+
 @app.route("/cfb/process", methods=["POST"])
 def process():
     request_start = time.perf_counter()

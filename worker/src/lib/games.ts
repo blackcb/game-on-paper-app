@@ -184,6 +184,164 @@ export async function fetchAndShapePBP(
   return pbp;
 }
 
+// Load-test variant of fetchAndShapePBP. Used only by the harness-gated
+// query-param branches in /cfb/game/:gameId (?arch=, ?replay=) for
+// scripts/loadtest/. Production traffic does not reach this code path.
+//
+// Two orthogonal axes:
+//
+//   - Transport: "service" (Architecture A: BackendFetch via Container
+//     DO binding, the production path) vs "fetch_cf" (Architecture B:
+//     public-URL fetch with cf:{cacheEverything,cacheTtlByStatus,...}
+//     so CF's standard cache + tiered cache pool the JSON across PoPs).
+//
+//   - Workload: "live" (real /cfb/process — heavy pipeline) vs "replay"
+//     (synthetic /cfb/process/replay — fixture truncated by wallclock,
+//     produces a body that grows over time so the harness exercises
+//     SWR refresh behavior).
+//
+// All four combinations are valid. The Worker handler picks based on
+// the request's query string so a single deploy serves every cell of
+// the comparison matrix.
+export interface LoadTestPBPOptions {
+  // Service-binding transport (Arch A). Mutually exclusive with `cached`.
+  // When set, mirrors the production call shape exactly.
+  python?: BackendFetch;
+  // Public-URL transport with edge cache (Arch B). Mutually exclusive
+  // with `python`.
+  cached?: {
+    baseUrl: string;
+    secret?: string;
+    // Mirrors the route handler's CACHE_CONTROL split. cf.cacheTtlByStatus
+    // requires us to express both the in-progress and completed TTLs;
+    // since synthetic-replay sets STATUS_IN_PROGRESS until elapsed >=
+    // duration, the in-progress TTL is the one the harness exercises
+    // most. Errors get TTL=0 (don't cache).
+    cacheTtlInProgress: number;
+    cacheTtlCompleted: number;
+  };
+  // Synthetic replay (when set, points the call at /cfb/process/replay
+  // instead of /cfb/process and passes startedAt/duration through).
+  replay?: { startedAt: number; duration: number };
+}
+
+export async function fetchAndShapePBPLoadTest(
+  gameId: string | number,
+  opts: LoadTestPBPOptions,
+): Promise<ProcessedGameData> {
+  if ((opts.python == null) === (opts.cached == null)) {
+    throw new Error("LoadTest: exactly one of {python, cached} required");
+  }
+
+  const path = opts.replay
+    ? `/cfb/process/replay?gameId=${encodeURIComponent(String(gameId))}` +
+      `&replay_started_at=${opts.replay.startedAt}` +
+      `&replay_duration=${opts.replay.duration}`
+    : "/cfb/process";
+
+  let response: Response;
+  if (opts.python) {
+    // Architecture A. Replay mode uses GET on the path with query string;
+    // live mode uses the existing POST + JSON-body shape.
+    if (opts.replay) {
+      response = await opts.python(path, { method: "GET" });
+    } else {
+      response = await opts.python(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gameId }),
+      });
+    }
+  } else if (opts.cached) {
+    // Architecture B. fetch() with a `cf` object so the response goes
+    // through CF's standard cache layer + tiered cache. GET only —
+    // POST bodies don't differentiate cache keys without Enterprise
+    // cf.cacheKey. The replay endpoint already supports GET; the
+    // live endpoint is POST-only in production but the harness can
+    // be configured to fall back to A-mode for ?arch=tiered+live (a
+    // configuration we leave unbuilt for now since the harness's
+    // primary case is replay).
+    if (!opts.replay) {
+      throw new Error(
+        "LoadTest: Architecture B requires replay mode (live /cfb/process is POST-only)",
+      );
+    }
+    const url = `${opts.cached.baseUrl}${path}`;
+    const headers: Record<string, string> = {};
+    if (opts.cached.secret) headers["X-Worker-Secret"] = opts.cached.secret;
+    response = await fetch(url, {
+      method: "GET",
+      headers,
+      cf: {
+        cacheEverything: true,
+        // Split TTL across status codes so the synthetic-replay's
+        // in-progress responses (200 OK) get the short TTL, and 4xx/5xx
+        // never poison the tiered cache. Numbers chosen to match the
+        // Worker's CACHE_CONTROL constants in index.tsx.
+        cacheTtlByStatus: {
+          "200-299": opts.cached.cacheTtlInProgress,
+          "404": 1,
+          "500-599": 0,
+        },
+      } as IncomingRequestCfPropertiesCacheRules,
+    });
+  } else {
+    throw new Error("LoadTest: no transport configured");
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Python ${path} returned ${response.status} (${opts.cached ? "fetch_cf" : "service"})`,
+    );
+  }
+
+  const data = (await response.json()) as ProcessResponse;
+  if (!validateProcessResponse(data)) {
+    logSchemaFailure(gameId, validateProcessResponse.errors ?? []);
+  }
+  const pbp: ProcessedGameData = { ...(data as ProcessedGameData) };
+  pbp.plays = data.plays ?? [];
+  pbp.advBoxScore = data.box_score;
+  pbp.boxScore = data.boxScore;
+  pbp.gameInfo = pbp.header?.competitions?.[0] as ProcessedGameData["gameInfo"];
+  pbp.scoringPlays = pbp.plays.filter((p) => p.scoringPlay === true);
+  delete pbp.records;
+  delete (pbp as { box_score?: unknown }).box_score;
+
+  if (pbp.plays.length > 0 && pbp.gameInfo?.status?.type?.completed === true) {
+    const homeId = pbp.homeTeamId;
+    const awayId = pbp.awayTeamId;
+    const last = pbp.plays[pbp.plays.length - 1];
+    if (last.winProbability == null) last.winProbability = {};
+    if (
+      String(last.pos_team) === String(homeId) &&
+      (last.homeScore ?? 0) > (last.awayScore ?? 0)
+    ) {
+      last.winProbability.after = 1.0;
+    } else if (
+      String(last.pos_team) === String(awayId) &&
+      (last.homeScore ?? 0) < (last.awayScore ?? 0)
+    ) {
+      last.winProbability.after = 1.0;
+    } else {
+      last.winProbability.after = 0.0;
+    }
+    if (homeId != null) {
+      (pbp.gameInfo as { gei?: number }).gei = calculateGEI(pbp.plays, homeId);
+    }
+  }
+  return pbp;
+}
+
+// Type aliasing the cf-property shape so the cast above is non-throwaway.
+// Cloudflare's IncomingRequestCfProperties is an input shape (request.cf);
+// for outbound fetch the cache properties are accepted on init.cf with the
+// same field names but a slightly different intersection. RequestInitCfProperties
+// is what Workers types ship for outbound fetch.
+type IncomingRequestCfPropertiesCacheRules = NonNullable<
+  RequestInitCfProperties
+>;
+
 // ESPN core PBP probe. Used to determine the game's pregame/in-progress
 // state and pull team metadata for the pregame template. Mirrors
 // the cdn.espn.com call at routes.js:468-477.
