@@ -81,6 +81,13 @@ export const DEFAULT_CONFIG = {
   // viewerCount * cyclePeriod requests is the rough upper bound on
   // concurrency.
   perViewerTimeoutMs: 20_000,
+  // Optional bypass token. When set, harness sends X-Loadtest-Token
+  // on every request. The Cloudflare WAF Skip rule keyed on this
+  // header lets the harness through Bot Fight Mode / managed
+  // challenges without disabling them zone-wide. Plumb via the
+  // Lambda invocation payload — never bake the literal token into
+  // the image.
+  loadtestToken: process.env.LOADTEST_TOKEN ?? null,
   // Body-hash window size. The first 4 KB of HTML/JSON is enough to
   // detect content-version changes (PBP plays array start, status
   // block, etc.) without storing 200+ KB hashes per request.
@@ -89,13 +96,28 @@ export const DEFAULT_CONFIG = {
 
 // ----- single request probe -----
 
-async function probe({ url, requestStart, signal }) {
+async function probe({ url, requestStart, signal, extraHeaders }) {
   const t0 = Date.now();
   // We could use undici with finer hooks for TCP/TLS phases, but
   // process.hrtime() round-trip + Date.now() for absolute clock is
   // sufficient for the architecture-comparison signal we want.
   const tHr = process.hrtime.bigint();
-  const res = await fetch(url, { signal, redirect: "follow" });
+  const res = await fetch(url, {
+    signal,
+    redirect: "follow",
+    headers: {
+      // Browser-shaped headers so Cloudflare's heuristic bot detection
+      // doesn't flag the Lambda IPs as datacenter automation. Bot
+      // Fight Mode on the free plan still 403s known-datacenter ASNs,
+      // so the operator should also add a WAF Skip rule keyed on
+      // X-Loadtest-Token (or temporarily disable Bot Fight Mode); see
+      // README.md for the runbook.
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) gameonpaper-loadtest",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      ...(extraHeaders ?? {}),
+    },
+  });
   const tHeadersHr = process.hrtime.bigint();
   const buf = await res.arrayBuffer();
   const tBodyHr = process.hrtime.bigint();
@@ -135,7 +157,8 @@ async function probe({ url, requestStart, signal }) {
 // ----- single viewer loop -----
 
 async function runViewer({ viewerIndex, target, gameId, runConfig, runStartedAt, emit }) {
-  const { cyclePeriodSeconds, cycleJitterSeconds, perViewerTimeoutMs, runDurationSeconds, replayDurationSeconds, region } = runConfig;
+  const { cyclePeriodSeconds, cycleJitterSeconds, perViewerTimeoutMs, runDurationSeconds, replayDurationSeconds, region, loadtestToken } = runConfig;
+  const extraHeaders = loadtestToken ? { "X-Loadtest-Token": loadtestToken } : undefined;
   const runEndsAt = runStartedAt + runDurationSeconds * 1000;
   let cycle = 0;
 
@@ -150,7 +173,7 @@ async function runViewer({ viewerIndex, target, gameId, runConfig, runStartedAt,
     const ac = new AbortController();
     const timeout = setTimeout(() => ac.abort(), perViewerTimeoutMs);
     try {
-      const result = await probe({ url, requestStart: runStartedAt, signal: ac.signal });
+      const result = await probe({ url, requestStart: runStartedAt, signal: ac.signal, extraHeaders });
       emit({
         type: "request",
         region,

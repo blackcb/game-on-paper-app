@@ -54,6 +54,10 @@ export const handler = async (event = {}) => {
   };
   if (event.targets) config.targets = event.targets;
   if (event.gameIds) config.gameIds = event.gameIds;
+  // Optional Cloudflare WAF bypass token. Pass via the invocation
+  // payload (run.sh sets it from a local env var) instead of baking
+  // into the Lambda env so rotating it doesn't require a redeploy.
+  if (event.loadtestToken) config.loadtestToken = event.loadtestToken;
 
   const result = await runDriver(config, emit);
 

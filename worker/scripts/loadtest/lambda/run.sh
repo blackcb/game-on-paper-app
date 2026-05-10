@@ -37,6 +37,7 @@ REGIONS=$(terraform output -json regions | jq -r '.[]')
 PAYLOAD=$(jq -nc \
   --arg prefix "runs/${RUN_TAG}" \
   --arg bucket "${BUCKET}" \
+  --arg token "${LOADTEST_TOKEN:-}" \
   '{
     viewerCount: 17,
     runDurationSeconds: 850,
@@ -44,7 +45,8 @@ PAYLOAD=$(jq -nc \
     cycleJitterSeconds: 5,
     replayDurationSeconds: 850,
     resultsBucket: $bucket,
-    resultsPrefix: $prefix
+    resultsPrefix: $prefix,
+    loadtestToken: ($token | select(. != ""))
   }')
 
 echo "Run tag: ${RUN_TAG}"
