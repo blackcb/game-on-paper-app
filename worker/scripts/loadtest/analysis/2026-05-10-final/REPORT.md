@@ -5,39 +5,79 @@ the play-by-play viewer endpoint at `sports.unseen-university.org`.
 Question being answered: which cache architecture should the site
 run on game day?
 
+> **Amendment 2026-05-10 (post-cutover)**: production observation
+> at off-season click rates revealed that the original framing
+> oversold B's tail latency. The synthetic-replay endpoint used in
+> the test costs ~30 ms of server work per cold-fill; the real
+> `/cfb/process` Python pipeline costs ~4-5 s. With sustained
+> harness load the JSON cache stayed warm and per-incident cold
+> cost rarely materialized in the numbers; with real off-season
+> click traffic the cache TTL expires between clicks and each
+> "cold" user clicks through a full ~5 s Python run. **B and A and
+> D all pay roughly the same ~5 s per cold-fill incident; B's win
+> is that it has fewer cold-fill incidents per unit time at game-
+> day scale, not that each incident is cheaper.** See §3.6 for the
+> off-season validation data and revised conclusion; the
+> Executive Summary, §4.4, and §6 have been updated in place. The
+> original synthetic-load data (§2, §3.1-3.5) is retained intact
+> because it correctly characterizes the cache-architecture
+> behavior — it just doesn't translate linearly to user-perceived
+> tail latency on real PBP.
+
 ## Executive summary
 
 **Architecture B (Workers + tiered-cache via fetch+cf to a public
-Python URL) is the right pick for game day.** It wins p95 by 39%
-(269 ms vs 442 ms) and p99 by 50% (389 ms vs 783 ms) over the
-production-default Architecture A (`caches.default` per-PoP +
-service-binding to a Cloudflare Container).
+Python URL) is the right pick for game day.** Not because each
+cold-fill is cheaper — they aren't; A and B and D all pay roughly
+the same ~5 s per real-PBP cold-fill — but because B has many
+fewer cold-fills per TTL window globally. At a 50,000-viewer / 50-
+PoP audience, B produces ~1 user/30s seeing the cold tail vs A's
+~50 users/30s.
 
-The trade-off is that A wins p50 — its same-PoP `caches.default` HIT
-sits closer to the Worker than CF's edge cache, so warm same-PoP
-requests are 60 ms faster (37 ms vs 97 ms median). For the warm
-path that already works fine (Saturday afternoon, established
-audience watching a single game), A is faster. For game-day arrival
-patterns — many distinct PoPs each filling a cache entry within
-the 30 s in-progress TTL — A's tail spikes 2-3× in PoPs that haven't
-been warmed by a prior viewer, while B's tail stays uniform.
+The synthetic-load test below measured **cache-architecture
+efficiency**, not real-PBP tail latency. With the replay endpoint
+(~30 ms server work per cold-fill) and sustained 17-viewer load
+keeping caches warm, B's measured p99 came in at 389 ms — but that
+number doesn't translate to production. With real PBP and off-season
+click traffic (one click every few minutes, no warming load), each
+cold-fill incident costs ~5 s of Python compute on **any** of the
+three architectures. See §3.6 for the off-season validation that
+established this.
+
+The test data below correctly characterizes the cache-layer
+behavior (hit rates, origin amplification, per-PoP cold-fill
+distribution). It does not predict the per-user p99 a real viewer
+will see — for that, the load-test methodology would need to drop
+the `?replay=` param and pay real Python compute cost, which the
+harness was designed to skip.
+
+The trade-off vs A: A wins p50 on the test (`caches.default` HIT is
+closer to the Worker than CF's edge cache; 37 ms vs 97 ms median).
+A also has a ~1 s lower per-cold-fill cost in production because the
+service binding to the Container doesn't have the extra "Worker →
+CF edge → public Python URL → droplet" hop B introduces. A loses on
+**volume** of cold-fills at scale: A pays once per PoP per TTL
+window, B pays once globally per TTL window.
 
 The legacy Architecture D (single DigitalOcean droplet running
-Express + Flask + Redis) was ~3× slower on the median than the
-Cloudflare-backed paths and ~1.5-2× slower on the tail. It runs
-without an edge cache, so every request pays a network round-trip
-to one box in NYC. There's no scenario where D wins.
+Express + Flask + Redis) had test p50 215 ms / p99 566 ms. In live
+off-season clicking, D's cold-fills are ~4 s vs B's ~5 s — D's
+shorter network path wins by ~1 s when both pay the Python cost.
+But D has no edge cache, so every user-distinct PoP request pays
+that cost; D scales linearly with audience size, not with PoP
+count.
 
-| Arch | n | p50 | p95 | p99 | upstream rate |
-|------|---|-----|-----|-----|---------------|
-| **A** caches.default | 854 | **37 ms** | 442 ms | 783 ms | 16.6% |
-| **B** fetch+cf tiered | 838 | 97 ms | **269 ms** | **389 ms** | **9.3%** |
-| **D** legacy DO | 702 | 215 ms | 435 ms | 566 ms | 100% |
+| Arch | test n | test p50 | test p99 | live cold-fill (real PBP) | upstream rate (test) |
+|------|--------|----------|----------|----------------------------|----------------------|
+| **A** caches.default | 854 | **37 ms** | 783 ms | ~5 s | 16.6% |
+| **B** fetch+cf tiered | 838 | 97 ms | **389 ms** | ~5 s | **9.3%** |
+| **D** legacy DO | 702 | 215 ms | 435 ms | ~4 s | 100% |
 
 The rest of this document explains the methodology, what the
-numbers mean, how often cold fills actually fire in each
-architecture, and what to expect on a real CFP-final-sized day with
-50+ distinct PoPs.
+synthetic numbers mean, how often cold fills actually fire in each
+architecture, the post-cutover off-season validation that revealed
+the per-incident framing limitation, and what to expect on a real
+CFP-final-sized day with 50+ distinct PoPs.
 
 ---
 
@@ -503,6 +543,110 @@ For a 50,000-concurrent CFP final, A produces ~50 cold-tail
 experiences per 30 s window across the audience; B produces ~3.
 That's the scaled story.
 
+### 3.6 Off-season validation (added 2026-05-10, post-cutover)
+
+After deploying Architecture B to production, manual click-testing
+at off-season traffic levels revealed that the per-incident
+cold-fill cost on B is ~5 s, not the ~700 ms my synthetic
+extrapolation in §4.2 originally suggested. This section documents
+that observation and the framing correction.
+
+**What was observed.** Clicking around the production site at
+off-season traffic (~no concurrent users, individual clicks
+minutes apart) consistently showed `server-timing: python;dur=4000-
+5600ms` on `/cfb/game/<id>` cache misses. The legacy gameonpaper.com
+showed similar 4 s cold-fills (Redis miss on the droplet → Python
+pipeline), occasionally as low as 0.5 s on Redis HITs.
+
+**Live measurement, 2026-05-10 16:55 UTC, ~35 s apart so the
+30 s tiered-cache TTL expires each call:**
+
+```
+B (tiered, forced uncached via cache-buster):
+  TTFB 6.5s   python;dur=5631 upstream-cache=EXPIRED
+  TTFB 5.2s   python;dur=4667 upstream-cache=EXPIRED
+  TTFB 5.2s   python;dur=4715 upstream-cache=EXPIRED
+  TTFB 5.3s   python;dur=4412 upstream-cache=EXPIRED
+  TTFB 4.7s   python;dur=4376 upstream-cache=EXPIRED
+
+D (legacy, forced uncached):
+  TTFB 4.1s
+  TTFB 0.54s  (Redis HIT)
+  TTFB 5.2s
+  TTFB 0.83s  (Redis HIT)
+  TTFB 8.2s
+```
+
+D wins per-cold-fill by ~1 s on average — its network path is
+shorter (user → droplet → Python in-process). B's path goes
+user → CF edge → CF cache MISS → upper-tier MISS → droplet → Python,
+plus the Worker render after the Python response. The extra ~1 s
+is the CF infrastructure overhead. D also benefits from Redis
+holding recent games warm independent of CDN TTLs.
+
+**Why the synthetic test missed this.**
+
+1. **Replay endpoint cost.** `/cfb/process/replay` is ~30 ms of
+   server work (load fixture, truncate, return). The synthetic
+   "cold fill" measured in §3.3 was upper-tier-cache-fill cost
+   (~270 ms median for B), not Python-pipeline cost. Real
+   `/cfb/process` is ~100× slower per cold-fill.
+2. **Sustained traffic kept caches warm.** 17 viewers × 30 s
+   cycles × 5 regions = ~3.4 RPS sustained against the same 3
+   game IDs. Each TTL window saw 100+ requests, so the cache was
+   essentially always warm in the test. A real off-season click
+   hits an expired cache by default.
+3. **Three-game rotation.** The harness rotated 3 captured
+   fixtures across 17 viewers per region. In production, users
+   click on many different games; per-game cache miss probability
+   is much higher.
+
+**What this does NOT change.**
+
+- The §2 cache-hit-rate measurements remain valid. A's 83% worker
+  HIT rate and B's 91% upstream HIT rate describe how often the
+  cache layer fires, regardless of upstream cost.
+- The origin-amplification ratio (A: 16.6%, B: 9.3%, D: 100%)
+  remains valid and predicts production behavior under sustained
+  load.
+- The §4.3 compute-cost projections remain valid: B burns ~17×
+  less Python compute than A at game-day scale, **because B has
+  fewer cold-fill incidents**, not because each one is cheaper.
+- B is still the right pick for game day for the reason the report
+  set out to prove: at 50,000 concurrent viewers across 50 PoPs,
+  B produces ~1 cold-tail incident per 30 s vs A's ~50. Fewer
+  affected users.
+
+**What this DOES change.**
+
+- **The per-user p99 numbers in §2.1 and §4.4 don't translate to
+  production.** A user who happens to be the unlucky one paying a
+  cold-fill sees ~5 s on either A or B with real PBP. The "B p99 =
+  389 ms" is a property of the test setup, not a prediction.
+- **At off-season traffic, B is slightly worse than D for
+  individual user clicks** (~1 s extra network overhead on cold-
+  fills). At sustained game-day load this is dominated by the
+  cold-fill volume advantage and B wins overall, but for an
+  audience of 5-10 simultaneous users (which is what off-season
+  looks like) D would arguably feel snappier.
+- **Pre-warming becomes attractive** as an off-season experience
+  fix. The `PREWARM_TOP_N` env var (currently 0) was scaffolded
+  for this case; flipping it on plus a cron task that fetches the
+  top-N most-likely-to-be-clicked games every 25 s would keep B's
+  caches hot during low traffic and eliminate the cold-fill-on-
+  click experience entirely. Out of scope for this report; tracked
+  as a follow-up.
+
+**Validation TODO for football season.** Re-run the harness against
+the live `/cfb/process` endpoint (drop the `?replay=` param so the
+harness targets `/cfb/game/<id>` without it) during a real in-
+progress game. Compare measured p99 against this report's
+projections. If projections hold at sustained ~50,000-viewer
+scale, the per-incident framing limitation matters less; the
+*frequency* of cold-fills is the load-bearing metric for the
+architecture choice. If they don't hold, expect to see B's
+real-world p99 closer to A's than to the synthetic 389 ms.
+
 ---
 
 ## 4. Scaling implications
@@ -583,25 +727,60 @@ That's a ~17× reduction in Python container CPU time for B.
 Translates to ~17× lower container compute cost, plus better
 headroom for peak spikes.
 
-### 4.4 Tail-latency at scale
+### 4.4 Tail-latency at scale (corrected 2026-05-10)
+
+**Earlier draft of this section misled by assuming B's cold-fill
+cost was the upper-tier-cache fill time (~700 ms) rather than the
+real Python pipeline cost (~5 s). The §3.6 off-season validation
+established that B's cold-fill is ~5 s of Python compute, same as
+A's. Corrected version below; original (synthetic-only) numbers
+preserved in the "Test (replay)" column.**
 
 For the unlucky-viewer experience — the one whose request happens
-to be the first in their PoP that TTL window — TTFB looks like:
+to be the first in their PoP (A) or first globally (B) that TTL
+window — TTFB looks like:
 
-| Audience | A median | A p99 | B median | B p99 |
-|---|---|---|---|---|
-| 50 viewers (test) | 37 ms | 783 ms | 97 ms | 389 ms |
-| 5,000 viewers, 50 PoPs (CFP semifinal) | ~30 ms (warm-cache dominant) | ~3,000 ms (real Python on cold tail) | ~80 ms (steady-state) | ~700 ms (one-time upper-tier cold) |
-| 50,000 viewers, 50 PoPs (CFP final, streaming era) | ~30 ms | ~3,000 ms | ~80 ms | ~700 ms |
+| Audience | A user p99 | B user p99 | Per-30s-window unlucky count: A / B |
+|---|---|---|---|
+| 50 viewers, 5 PoPs (test, synthetic replay) | 783 ms | 389 ms | (test artifact, sustained warm) |
+| 50 viewers, 5 PoPs (real PBP, projected) | ~5 s | ~5 s | 5 / 1 |
+| 5,000 viewers, 50 PoPs (CFP semifinal) | ~5 s | ~5 s | 50 / ~3 |
+| 50,000 viewers, 50 PoPs (CFP final) | ~5 s | ~5 s | 50 / ~3 |
 
-A's p99 doesn't improve with scale (the *probability* drops, but
-the *value* of a cold tail doesn't change — it's set by Python
-compute time). B's p99 also doesn't improve, but it stays low.
+**Per-cold-fill cost is roughly identical across A and B** when
+real Python runs. The only differences:
+- B has ~1 s of extra network overhead per cold-fill (Worker →
+  CF edge → public droplet URL vs A's Worker → service-binding →
+  Container).
+- A's cold-fill volume scales with PoP count; B's stays roughly
+  constant.
 
-**Takeaway:** at any audience size, an A user's worst-case
-experience is 3 seconds of waiting; a B user's worst-case is ~700
-ms. The ratio of how-often-this-happens improves with scale on both
-architectures, but the ceiling stays where it is.
+The "Per-30s-window unlucky count" column is the load-bearing
+metric for architecture choice. At a CFP final with 50,000 viewers
+distributed across 50 PoPs:
+
+- **A**: every PoP pays one ~5 s cold-fill per TTL window. That's
+  50 users every 30 s seeing a 5 s tail. Of 50,000 viewers, that's
+  ~1 in 1,000 viewers per cycle, ~5 in 1,000 per 5 cycles, etc.
+  ~3% of viewers see at least one ~5 s response over a 15-min
+  in-progress window.
+- **B**: roughly 1-3 upper-tier hubs each pay one ~5 s cold-fill
+  per TTL window. That's ~3 users every 30 s seeing a 5 s tail.
+  ~6 in 100,000 viewers per cycle. ~0.2% of viewers see at least
+  one ~5 s response over a 15-min window.
+
+So at scale, **15× fewer users feel the cold tail on B**. Not
+faster cold-fills, but rarer ones.
+
+**Takeaway:** at any audience size, A's and B's worst-case
+experiences are similar in magnitude (~5 s). The architecture
+choice matters at the *audience aggregate* level — B keeps the
+fraction of users hit by a cold tail much smaller, which is what
+makes the difference for engagement metrics on big games. For
+small audiences (off-season, low-volume games), the
+fraction-affected isn't very different and the per-user
+experience is what matters most; here A's slightly lower
+network overhead per cold-fill makes it marginally preferable.
 
 ---
 
@@ -659,47 +838,63 @@ high.**
 
 ## 6. Recommendations
 
-1. **Migrate game-page handler to fetch+cf (Architecture B).**
-   The migration is not large — see `worker/src/lib/games.ts:fetchAndShapePBPLoadTest`
-   for the implementation pattern. Replace `caches.default.match` +
-   service-binding fetch in the main `/cfb/game/:gameId` handler
-   with the same fetch+cf shape, point at `python.unseen-university.org`
-   (or whichever public Python URL is canonical post-Phase-3E).
-   Validate via the harness re-run before promoting to production.
-2. **Keep `caches.default` for non-cacheable-URL routes.** The
-   pregame template branch and team-leaderboard pages have request
-   shapes (POST bodies, query-string identity, etc.) that can't
-   be cached via fetch+cf without Enterprise-only `cacheKey`
-   customization. `caches.default` remains the right tool there.
-3. **Don't decommission the DigitalOcean droplet on schedule.**
-   Architecture B's public Python URL is currently the legacy
-   droplet at `python.unseen-university.org`. If Phase 3E
-   decommissions the droplet, B's origin disappears. Either:
-   (a) move B's origin to a public-facing Cloudflare Container
-   route (requires new wrangler config — Containers don't expose
-   public hostnames natively but a thin Worker proxy can do it),
-   or (b) keep the droplet as the Python-only origin behind
-   `python.unseen-university.org` and shift Phase 3E to deprecate
-   only `frontend/`, `redis/`, `caddy/`.
-4. **Re-run the harness during football season** with `?replay=`
-   omitted to validate against real PBP traffic. The production
-   `serveLoadTestGame` branch would need a small extension to
-   accept live URLs as targets (currently replay-only). Or just
-   run the harness against real `/cfb/game/<id>` URLs and skip the
-   `replay` param — the harness already supports that target shape
-   for D.
-5. **For A staying in production**, bump the Container's
-   `max_instances` from 5 to ~15 to absorb 50-PoP traffic spikes.
-   The observed 16.6% test cold rate would translate to occasional
-   1-2 RPS bursts at game start that the current 5-instance cap
-   could throttle.
-6. **The §6 known issue (5-concurrent run hang) deserves a real
-   investigation** before the next test. Worth ~2 hours of
-   debugging — try `aws lambda invoke --no-cli-auto-prompt`,
-   confirm the AWS CLI isn't multiplexing connections, check
-   account-level Lambda concurrency limits, look at whether
-   Cloudflare returns a Server-Timing-Allow-Origin or other
-   coordination header that affects undici behavior.
+**Status: production has been on Architecture B since 2026-05-10.**
+Migration committed in `864c6059..926cb9c6` on
+`instrument-plus-cloudflare-cdn`. The recommendations below are
+written with the §3.6 off-season validation in mind, not as
+pre-migration advice.
+
+1. **Stay on Architecture B** (current production). The §3.6 finding
+   that B's per-incident cold-fill cost is ~5 s (same as A and D)
+   doesn't undermine the migration; it changes the framing from
+   "B has a tighter tail" to "B has fewer tail incidents at scale."
+   The fundamental load-shaping property — origin called once
+   globally per TTL window vs once per PoP per TTL window — is
+   still the load-bearing benefit and still motivates the
+   migration for game-day traffic.
+2. **Keep `caches.default` for the rendered HTML.** Already in
+   place; warm same-PoP HITs return in 65-300 ms via the Worker's
+   per-PoP cache. This is what makes "normal clicks" (repeat
+   visits to the same URL) feel snappy. Without it, B's 65 ms
+   warm path would become ~150 ms.
+3. **Implement the pre-warm cron** (`PREWARM_TOP_N` env var,
+   currently set to 0). At off-season traffic levels the tiered
+   cache TTL expires between clicks and every user is
+   effectively hitting a cold cache — see §3.6. A cron task that
+   fetches the top-N games every 25 s (< 30 s TTL) keeps both
+   caches.default AND the tiered cache hot, reducing real-world
+   user cold-fills to near-zero outside of brand-new game IDs.
+   Out-of-scope for this test; implementation is straightforward
+   (Worker `scheduled` handler + KV-backed top-N list).
+4. **Don't decommission the DigitalOcean droplet on schedule.**
+   Architecture B's public Python URL is the legacy droplet at
+   `python.unseen-university.org`. If Phase 3E decommissions the
+   droplet, B's origin disappears. Either: (a) move B's origin to
+   a public-facing Cloudflare Container route (a thin Worker
+   proxy in front of the Container), or (b) keep the droplet as
+   the Python-only origin and shift Phase 3E to deprecate only
+   `frontend/`, `redis/`, `caddy/`. **CLAUDE.md and
+   docs/migration-plan.md have already been amended to reflect
+   option (b).**
+5. **Re-run the harness during football season** with `?replay=`
+   omitted to validate the §3.6 projections against real PBP
+   traffic. The harness already supports a real-game target shape
+   for D; extending it to A and B is small (drop the replay-mode
+   conditional from the URL builder). This is the test that would
+   convert the §3.6 corrections from "projected" to "measured".
+6. **For potential rollback to A**, bump the Container's
+   `max_instances` from 5 to ~15 before flipping the env var
+   back. The observed 16.6% test cold rate would translate to
+   occasional 1-2 RPS bursts at game start that the current
+   5-instance cap could throttle. (No action needed unless you
+   actually roll back.)
+7. **The known issue (5-concurrent `aws lambda invoke` hang)
+   deserves a real investigation** before the next test. Worth
+   ~2 hours of debugging — try `aws lambda invoke
+   --no-cli-auto-prompt`, confirm the AWS CLI isn't multiplexing
+   connections, check account-level Lambda concurrency limits,
+   look at whether the staggered firing pattern hits a
+   Cloudflare side effect.
 
 ---
 
