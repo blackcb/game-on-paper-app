@@ -117,34 +117,17 @@ interface ProcessResponse {
   [key: string]: unknown;
 }
 
-// Calls the Python /cfb/process endpoint. Returns the raw response
-// reshaped into the ProcessedGameData shape the templates expect:
-// plays array, derived gameInfo, scoring play subset, last-play WP
-// pinned to 1.0/0.0 for completed games, GEI computed for completed.
-// Mirrors games.js:129-171 (_remoteRetrievePBP). Public from sub-
-// phase 2D onwards — was wrapped by getPBP/peekCachedPBP in 2B
-// when KV was the cache layer.
-//
-// Schema validation (sub-phase 2G): the Python response is run
-// through the JSON Schema contract validator before the reshape.
-// Failures are warn-only — Python is the canonical validator so
-// rejecting here would turn schema drift into user-visible errors.
-export async function fetchAndShapePBP(
-  // Sub-phase 3B: takes a `BackendFetch` from lib/backends.ts so the
-  // call site doesn't have to know whether Python is reached via
-  // HTTPS to the droplet (with X-Worker-Secret stamping) or via
-  // a Cloudflare Container DO binding. The toggle lives in the env
-  // (`PYTHON_BACKEND`); see SEASON-MODES.md for the deploy story.
-  python: BackendFetch,
+// Reshape a /cfb/process Response into ProcessedGameData. Shared by
+// the service-binding caller (fetchAndShapePBP) and the tiered-fetch
+// caller (fetchAndShapePBPTiered) — they differ only in how they
+// obtain the Response.
+async function _reshapeProcessResponse(
+  response: Response,
   gameId: string | number,
+  pathLabel: string,
 ): Promise<ProcessedGameData> {
-  const response = await python("/cfb/process", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ gameId }),
-  });
   if (!response.ok) {
-    throw new Error(`Python /cfb/process returned ${response.status}`);
+    throw new Error(`Python ${pathLabel} returned ${response.status}`);
   }
   const data = (await response.json()) as ProcessResponse;
   if (!validateProcessResponse(data)) {
@@ -182,6 +165,104 @@ export async function fetchAndShapePBP(
     }
   }
   return pbp;
+}
+
+// Calls the Python /cfb/process endpoint. Returns the raw response
+// reshaped into the ProcessedGameData shape the templates expect:
+// plays array, derived gameInfo, scoring play subset, last-play WP
+// pinned to 1.0/0.0 for completed games, GEI computed for completed.
+// Mirrors games.js:129-171 (_remoteRetrievePBP). Public from sub-
+// phase 2D onwards — was wrapped by getPBP/peekCachedPBP in 2B
+// when KV was the cache layer.
+//
+// Schema validation (sub-phase 2G): the Python response is run
+// through the JSON Schema contract validator before the reshape.
+// Failures are warn-only — Python is the canonical validator so
+// rejecting here would turn schema drift into user-visible errors.
+export async function fetchAndShapePBP(
+  // Sub-phase 3B: takes a `BackendFetch` from lib/backends.ts so the
+  // call site doesn't have to know whether Python is reached via
+  // HTTPS to the droplet (with X-Worker-Secret stamping) or via
+  // a Cloudflare Container DO binding. The toggle lives in the env
+  // (`PYTHON_BACKEND`); see SEASON-MODES.md for the deploy story.
+  python: BackendFetch,
+  gameId: string | number,
+): Promise<ProcessedGameData> {
+  const response = await python("/cfb/process", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ gameId }),
+  });
+  return _reshapeProcessResponse(response, gameId, "/cfb/process");
+}
+
+// Architecture B path. Calls Python via fetch+cf so the JSON response
+// participates in CF's standard cache + Smart Tiered Cache. Used when
+// PYTHON_FETCH_MODE === "tiered". Selected by the route handler in
+// index.tsx; production callers don't pick this directly.
+//
+// Mechanics:
+//   - GET so the URL (containing gameId) is the cache key. POST bodies
+//     can't differentiate cache entries on the Free plan.
+//   - cf.cacheEverything: true forces caching even though the response
+//     is JSON without an explicit Cache-Control directive Cloudflare
+//     would otherwise honor.
+//   - cf.cacheTtlByStatus splits TTL across status codes so the
+//     in-progress 200s get the short TTL; 404s (ESPN-malformed)
+//     barely cache; 5xxs never cache.
+//   - X-Worker-Secret authorizes the public Python URL — the droplet's
+//     Caddy config gates on this header. Worker secret manager holds
+//     the value; non-secret env doesn't.
+//
+// Optional `metadata` output captures the inner fetch's
+// cf-cache-status so the route handler can stamp x-upstream-cache on
+// its outgoing response — gives observability into whether the inner
+// cache is engaging without parsing server-timing strings.
+export interface TieredFetchEnv {
+  PYTHON_BASE_URL: string;
+  WORKER_SHARED_SECRET?: string;
+}
+
+export interface TieredFetchMetadata {
+  upstreamCacheStatus?: string | null;
+  upstreamServerTiming?: string | null;
+}
+
+export async function fetchAndShapePBPTiered(
+  env: TieredFetchEnv,
+  gameId: string | number,
+  metadata?: TieredFetchMetadata,
+): Promise<ProcessedGameData> {
+  const url = `${env.PYTHON_BASE_URL}/cfb/process?gameId=${encodeURIComponent(String(gameId))}`;
+  const headers: Record<string, string> = {};
+  if (env.WORKER_SHARED_SECRET) {
+    headers["X-Worker-Secret"] = env.WORKER_SHARED_SECRET;
+  }
+  const response = await fetch(url, {
+    method: "GET",
+    headers,
+    cf: {
+      cacheEverything: true,
+      // Numbers picked to match CACHE_CONTROL.inProgress.max-age in
+      // index.tsx. The Worker's caches.default for the rendered HTML
+      // carries the long-term cache for completed games (1y); the
+      // JSON layer underneath stays short-TTL because we can't tell
+      // a completed game from an in-progress one before fetching
+      // (and using the response status would defeat the cache).
+      cacheTtlByStatus: {
+        "200-299": 30,
+        "404": 1,
+        "500-599": 0,
+      },
+    } as RequestInitCfProperties,
+  });
+
+  if (metadata) {
+    metadata.upstreamCacheStatus = response.headers.get("cf-cache-status");
+    metadata.upstreamServerTiming = response.headers.get("server-timing");
+  }
+
+  return _reshapeProcessResponse(response, gameId, "/cfb/process");
 }
 
 // Load-test variant of fetchAndShapePBP. Used only by the harness-gated

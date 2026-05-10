@@ -14,9 +14,11 @@ import {
   QUARANTINE_LIST,
   fetchAndShapePBP,
   fetchAndShapePBPLoadTest,
+  fetchAndShapePBPTiered,
   probeEspnPbp,
   type EspnPbpEnvelope,
   type ProcessedGameData,
+  type TieredFetchMetadata,
 } from "./lib/games";
 import {
   getCachedCurrentScoreboard,
@@ -97,6 +99,12 @@ type Bindings = {
   // (3D) flips them to "container".
   PYTHON_BACKEND?: string;
   SUMMARY_BACKEND?: string;
+  // Architecture B migration (2026-05-10). "service" (default) selects
+  // the production-historical service-binding-to-Container path;
+  // "tiered" selects the fetch+cf path that participates in CF's
+  // standard cache + Smart Tiered Cache. See lib/games.ts and
+  // docs/migrate-to-tiered-cache.md.
+  PYTHON_FETCH_MODE?: string;
   // Drives sleepAfter on the Container DO subclasses (see
   // src/containers.ts and SEASON-MODES.md). Only meaningful when
   // PYTHON_BACKEND/SUMMARY_BACKEND === "container".
@@ -603,13 +611,25 @@ function cachedHtml(body: string, cacheControl: string): Response {
   });
 }
 
-function cachedJson(body: unknown, cacheControl: string): Response {
-  return new Response(JSON.stringify(body), {
-    headers: {
-      "content-type": "application/json",
-      "cache-control": cacheControl,
-    },
+// Variants that take extra observability headers. Used by the
+// /cfb/game/:gameId handler to stamp x-fetch-mode + x-upstream-cache
+// on responses during the Architecture B migration.
+function cachedHtmlWithHeaders(body: string, cacheControl: string, extra: Record<string, string>): Response {
+  const headers = new Headers({
+    "content-type": "text/html; charset=UTF-8",
+    "cache-control": cacheControl,
   });
+  for (const [k, v] of Object.entries(extra)) headers.set(k, v);
+  return new Response(body, { headers });
+}
+
+function cachedJsonWithHeaders(body: unknown, cacheControl: string, extra: Record<string, string>): Response {
+  const headers = new Headers({
+    "content-type": "application/json",
+    "cache-control": cacheControl,
+  });
+  for (const [k, v] of Object.entries(extra)) headers.set(k, v);
+  return new Response(JSON.stringify(body), { headers });
 }
 
 // Load-test branch sentinel. When `?replay=<unix_ts>` is present on a
@@ -905,16 +925,33 @@ app.get("/cfb/game/:gameId", async (c) => {
   // render game_error with explicit no-store so the standard
   // cache (per Cache Rule from 2I) won't hold the failure past
   // the underlying Python/ESPN issue resolving.
+  //
+  // PYTHON_FETCH_MODE selects the transport:
+  //   - "service" (default, today's behavior): service-binding to
+  //     the Cloudflare Container, POST /cfb/process. Per-PoP cache
+  //     via caches.default at the Worker layer.
+  //   - "tiered" (Architecture B, post-migration target): public-URL
+  //     fetch with cf:{cacheEverything,cacheTtlByStatus}. The JSON
+  //     response participates in CF's standard cache + Smart Tiered
+  //     Cache, pooling across PoPs. caches.default still wraps the
+  //     rendered HTML at this layer for warm-path speed.
+  // Cutover happens by flipping wrangler.toml; rollback is the same
+  // edit in reverse. Per docs/migrate-to-tiered-cache.md.
+  const pythonFetchMode = c.env.PYTHON_FETCH_MODE === "tiered" ? "tiered" : "service";
+  const tieredMeta: TieredFetchMetadata = {};
   let data: ProcessedGameData;
   try {
     data = await time(c, "python", () =>
-      fetchAndShapePBP(pythonBackend(c.env), gameId),
+      pythonFetchMode === "tiered"
+        ? fetchAndShapePBPTiered(c.env, gameId, tieredMeta)
+        : fetchAndShapePBP(pythonBackend(c.env), gameId),
     );
   } catch (err) {
     console.log(
       JSON.stringify({
         event: "python_failure",
         gameId,
+        mode: pythonFetchMode,
         error: (err as Error).message,
       }),
     );
@@ -933,8 +970,19 @@ app.get("/cfb/game/:gameId", async (c) => {
   const completed = data.gameInfo.status?.type?.completed === true;
   const cacheControl = completed ? CACHE_CONTROL.completed : CACHE_CONTROL.inProgress;
 
+  // Build extra response headers for observability. x-fetch-mode lets
+  // operators see which transport handled this request (especially
+  // useful during the cutover smoke window). x-upstream-cache surfaces
+  // the inner fetch's cf-cache-status when in tiered mode — gives
+  // visibility into whether the JSON cache is engaging without parsing
+  // server-timing strings.
+  const extraHeaders: Record<string, string> = { "x-fetch-mode": pythonFetchMode };
+  if (tieredMeta.upstreamCacheStatus) {
+    extraHeaders["x-upstream-cache"] = tieredMeta.upstreamCacheStatus;
+  }
+
   if (isJsonShortcut) {
-    const response = cachedJson(data, cacheControl);
+    const response = cachedJsonWithHeaders(data, cacheControl, extraHeaders);
     c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
     return response;
   }
@@ -959,7 +1007,7 @@ app.get("/cfb/game/:gameId", async (c) => {
   const html = await time(c, "render", async () =>
     (<GamePage gameData={data as unknown as RenderableGameData} percentiles={percentiles} season={clamped} />).toString(),
   );
-  const response = cachedHtml(html, cacheControl);
+  const response = cachedHtmlWithHeaders(html, cacheControl, extraHeaders);
   c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
 });
