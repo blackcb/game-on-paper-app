@@ -26,7 +26,17 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 // path resolves at Lambda runtime, not at git-checkout layout.
 import { runDriver } from "./driver.mjs";
 
-const s3 = new S3Client({});
+// S3Client must use the bucket's region, not the Lambda's region.
+// terraform creates the bucket in var.primary_region (us-east-1) and
+// every regional Lambda writes to it cross-region. The default
+// S3Client picks up AWS_REGION from the Lambda env, which is the
+// Lambda's *own* region — so a us-west-1 Lambda writing to a
+// us-east-1 bucket would get HTTP 301 PermanentRedirect at PutObject
+// time. Hardcode us-east-1 here; the Lambda env var
+// LOADTEST_BUCKET_REGION lets a future re-deploy override without
+// code changes.
+const BUCKET_REGION = process.env.LOADTEST_BUCKET_REGION ?? "us-east-1";
+const s3 = new S3Client({ region: BUCKET_REGION });
 
 export const handler = async (event = {}) => {
   const region = process.env.AWS_REGION ?? event.region ?? "unknown";

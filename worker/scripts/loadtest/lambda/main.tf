@@ -201,6 +201,9 @@ locals {
     source_code_hash = data.archive_file.lambda_zip.output_base64sha256
     environment = {
       LOADTEST_RESULTS_BUCKET = aws_s3_bucket.results.id
+      // Bucket lives in the primary region; non-primary Lambdas need
+      // to know that or PutObject 301-redirects.
+      LOADTEST_BUCKET_REGION  = var.primary_region
     }
   }
 }
