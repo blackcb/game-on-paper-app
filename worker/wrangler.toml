@@ -110,14 +110,15 @@ SUMMARY_BASE_URL = "https://summary.unseen-university.org"
 PYTHON_BACKEND = "container"
 SUMMARY_BACKEND = "container"
 # Architecture B migration (2026-05-10). Read by index.tsx's
-# /cfb/game/:gameId handler. "service" = today's path (caches.default
-# at the Worker + service-binding to the Container). "tiered" = the
-# Architecture B path (fetch+cf to PYTHON_BASE_URL with
+# /cfb/game/:gameId handler. "service" = pre-2026-05-10 path
+# (caches.default at the Worker + service-binding to the Container).
+# "tiered" = Architecture B path (fetch+cf to PYTHON_BASE_URL with
 # cacheEverything+cacheTtlByStatus, so the JSON response participates
-# in CF's standard cache + Smart Tiered Cache). Phase 1 of the cutover
-# leaves this at "service" — no behavior change. Flip to "tiered" in
-# Phase 3 of the migration. See docs/migrate-to-tiered-cache.md.
-PYTHON_FETCH_MODE = "service"
+# in CF's standard cache + Smart Tiered Cache). Cut over to "tiered"
+# 2026-05-10. Rollback: flip back to "service" + redeploy (~30s).
+# See docs/migrate-to-tiered-cache.md and the load-test report at
+# worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md.
+PYTHON_FETCH_MODE = "tiered"
 # 3B sleepAfter driver (read by Container subclass in src/containers.ts).
 # This file is the "normal" weekday-in-season profile.
 SEASON_MODE = "normal"
