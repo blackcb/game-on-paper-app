@@ -223,6 +223,18 @@ export interface LoadTestPBPOptions {
   // Synthetic replay (when set, points the call at /cfb/process/replay
   // instead of /cfb/process and passes startedAt/duration through).
   replay?: { startedAt: number; duration: number };
+  // Output channel for upstream-fetch metadata. The handler that
+  // wraps this function uses these fields to stamp custom headers on
+  // its response so the harness can distinguish "B served from edge
+  // cache" from "B fetched fresh from origin" — without it, the
+  // Worker response gives no signal about the inner fetch's
+  // cf-cache-status (the inner fetch's response headers don't
+  // automatically propagate). Populated even on success so the
+  // analysis can compute origin amplification correctly.
+  metadata?: {
+    upstreamCacheStatus?: string | null;
+    upstreamServerTiming?: string | null;
+  };
 }
 
 export async function fetchAndShapePBPLoadTest(
@@ -287,6 +299,18 @@ export async function fetchAndShapePBPLoadTest(
     });
   } else {
     throw new Error("LoadTest: no transport configured");
+  }
+
+  // Capture upstream-side cache status for the harness analysis.
+  // For Architecture A (service binding) this is always null — the
+  // service binding doesn't go through the CF edge cache. For
+  // Architecture B (fetch+cf) this is "HIT", "MISS", "EXPIRED",
+  // "REVALIDATED", etc. — the standard CF cache header on the inner
+  // fetch's response. The handler propagates it as `x-upstream-cache`
+  // on its outgoing response so the JSONL log captures it.
+  if (opts.metadata) {
+    opts.metadata.upstreamCacheStatus = response.headers.get("cf-cache-status");
+    opts.metadata.upstreamServerTiming = response.headers.get("server-timing");
   }
 
   if (!response.ok) {

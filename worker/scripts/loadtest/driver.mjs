@@ -124,6 +124,10 @@ async function probe({ url, requestStart, signal }) {
     x_worker_cache: res.headers.get("x-worker-cache") ?? null,
     x_arch: res.headers.get("x-arch") ?? null,
     x_replay_play_index: res.headers.get("x-replay-play-index") ?? null,
+    // Architecture B's load-bearing signal: the inner fetch+cf's cache
+    // status, propagated by serveLoadTestGame. Architecture A returns
+    // null here (service binding bypasses the edge cache).
+    x_upstream_cache: res.headers.get("x-upstream-cache") ?? null,
     content_encoding: res.headers.get("content-encoding") ?? null,
   };
 }

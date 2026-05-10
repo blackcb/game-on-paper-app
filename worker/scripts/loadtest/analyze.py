@@ -111,23 +111,51 @@ def summary_table(df: pd.DataFrame) -> pd.DataFrame:
 def origin_amplification(df: pd.DataFrame) -> pd.DataFrame:
     """Approximate origin Python call rate per architecture.
 
-    Heuristic: server-timing carrying `python;dur=...` is the cold-MISS
-    signature on architecture A. For B, server-timing on a fetch-cache
-    HIT shows only `total;dur=...` — absence of `python;` is the
-    HIT signature. For D, server-timing isn't emitted at all.
+    Two modes, depending on whether the run was synthetic-replay or
+    real-game:
 
-    Strictly a ratio of "fresh upstream Python calls / total requests".
-    Lower is better — every Python call paid was a cache miss someone
-    was about to also be paying for.
+      - Real game (no `?replay=` on the URL): `python;dur=...` in
+        server-timing is the heavy-pipeline signature. Cache HITs
+        skip that entirely. Use that as the upstream-call test.
+      - Synthetic replay: `/cfb/process/replay` returns
+        `replay_truncate;dur=0, total;dur=N` regardless of cache
+        path, so `python;dur=` is never present. Fall back to the
+        cache-hit heuristic: a request is "upstream" if neither
+        `x-worker-cache: HIT` (Architecture A's per-PoP cache) nor
+        `cf-cache-status: HIT` (CF edge cache, which Architecture B
+        sees on the inner fetch though it doesn't surface in the
+        Worker's response — see body_hash_convergence for the
+        practical workaround).
+
+    Strictly a ratio of "fresh upstream calls / total requests".
+    Lower is better — every upstream call paid was a cache miss
+    someone was about to also be paying for. With synthetic replay,
+    interpret B's number cautiously: the Worker still re-renders HTML
+    on a JSON cache HIT, so `worker_hit` will be 0 even when the
+    expensive layer was cached.
     """
     ok = df[df["type"] == "request"].copy()
     ok["had_python_timing"] = ok["server_timing"].fillna("").str.contains(r"python;dur=", regex=True)
+    ok["any_cache_hit"] = (
+        (ok["x_worker_cache"] == "HIT")
+        | (ok["cf_cache_status"] == "HIT")
+        | (ok.get("x_upstream_cache", pd.Series(dtype=object)) == "HIT")
+    )
     grp = ok.groupby("target_label")
     agg = grp.agg(
         requests=("had_python_timing", "size"),
+        # Real-game signature: `python;dur=` was emitted.
         python_calls=("had_python_timing", "sum"),
+        # Synthetic-replay signature: response was NOT a cache hit
+        # at any layer (Worker `caches.default` for A; inner fetch+cf
+        # for B; nothing for D). The `x-upstream-cache` header is the
+        # B-specific signal — without it B's number would be wrong
+        # because the Worker re-renders HTML every request and so
+        # x-worker-cache never says HIT for arch=tiered.
+        non_hit_calls=("any_cache_hit", lambda s: (~s).sum()),
     )
-    agg["ratio"] = agg["python_calls"] / agg["requests"]
+    agg["ratio_python"] = agg["python_calls"] / agg["requests"]
+    agg["ratio_non_hit"] = agg["non_hit_calls"] / agg["requests"]
     return agg.reset_index()
 
 

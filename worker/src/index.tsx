@@ -662,6 +662,11 @@ async function serveLoadTestGame(
   }
 
   let data: ProcessedGameData;
+  // Output channel for the inner fetch's cf-cache-status. Architecture
+  // B's whole point is the inner fetch participating in tiered cache;
+  // without surfacing this header on the Worker's outgoing response
+  // the harness can't distinguish a B-edge-HIT from a B-origin-MISS.
+  const metadata: { upstreamCacheStatus?: string | null; upstreamServerTiming?: string | null } = {};
   try {
     data = await time(c, "loadtest_pbp", () =>
       fetchAndShapePBPLoadTest(gameId, {
@@ -679,6 +684,7 @@ async function serveLoadTestGame(
             }
           : undefined,
         replay: { startedAt: replayStartedAt, duration: replayDuration },
+        metadata,
       }),
     );
   } catch (err) {
@@ -700,13 +706,13 @@ async function serveLoadTestGame(
   const cacheControl = completed ? CACHE_CONTROL.completed : CACHE_CONTROL.inProgress;
 
   if (isJsonShortcut) {
-    const response = new Response(JSON.stringify(data), {
-      headers: {
-        "content-type": "application/json",
-        "cache-control": cacheControl,
-        "x-arch": arch,
-      },
-    });
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "cache-control": cacheControl,
+      "x-arch": arch,
+    };
+    if (metadata.upstreamCacheStatus) headers["x-upstream-cache"] = metadata.upstreamCacheStatus;
+    const response = new Response(JSON.stringify(data), { headers });
     if (arch === "baseline") {
       c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
     }
@@ -740,13 +746,13 @@ async function serveLoadTestGame(
       />
     ).toString(),
   );
-  const response = new Response(html, {
-    headers: {
-      "content-type": "text/html; charset=UTF-8",
-      "cache-control": cacheControl,
-      "x-arch": arch,
-    },
-  });
+  const responseHeaders: Record<string, string> = {
+    "content-type": "text/html; charset=UTF-8",
+    "cache-control": cacheControl,
+    "x-arch": arch,
+  };
+  if (metadata.upstreamCacheStatus) responseHeaders["x-upstream-cache"] = metadata.upstreamCacheStatus;
+  const response = new Response(html, { headers: responseHeaders });
   if (arch === "baseline") {
     c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
   }
