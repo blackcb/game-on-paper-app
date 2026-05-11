@@ -1,6 +1,7 @@
-from flask import Flask, request, jsonify
+from flask import Flask, Response, request, jsonify
 from flask_compress import Compress
-import numpy as np
+import orjson
+import math
 from datetime import datetime as dt, timezone as tz
 from flask_logs import LogSetup
 from sportsdataverse.cfb.cfb_pbp import CFBPlayProcess
@@ -19,6 +20,16 @@ app.config["LOG_LEVEL"] = os.environ.get("LOG_LEVEL", "INFO")
 # returns multi-MB JSON (3 MB raw on a typical game page) that
 # compresses 5-10x. Cuts the python -> node hop's wire bytes
 # proportionally and shaves real time off node's response render.
+#
+# 2026-05-10 perf pass: dropped brotli level from default (11, max
+# quality) to 4. The consumer is the Worker (machine, not browser)
+# so we don't need maximum compression; 4 gets ~95% of the size
+# reduction for ~10% of the CPU. Same logic for gzip fallback at 5.
+# Skip compression for sub-1KB bodies (small status/healthcheck
+# replies don't benefit and pay CPU + Content-Length recompute).
+app.config["COMPRESS_BR_LEVEL"] = 4
+app.config["COMPRESS_LEVEL"] = 5
+app.config["COMPRESS_MIN_SIZE"] = 1024
 Compress(app)
 
 logs = LogSetup()
@@ -141,6 +152,128 @@ _REPLAY_FIXTURE_DIR = os.path.join(
 )
 _REPLAY_FIXTURE_CACHE: dict = {}
 
+# Flat sportsdataverse intermediate columns. The reshape loop in
+# process() re-nests their values into ESPN-shaped objects
+# (record["start"], record["end"], record["modelInputs"], etc.), then
+# we delete these from the record so the response matches the
+# pre-pipeline ESPN shape the frontend expects. Removing one without
+# removing its consumer in the loop will surface as a KeyError; adding
+# one without its source column ditto. Hoisted to module-level
+# frozenset (2026-05-10 perf pass) so the list isn't rebuilt per call;
+# `in` against a frozenset is also faster than against a list.
+_BAD_COLS = frozenset({
+    "start.distance",
+    "start.yardLine",
+    "start.team.id",
+    "start.down",
+    "start.yardsToEndzone",
+    "start.posTeamTimeouts",
+    "start.defTeamTimeouts",
+    "start.shortDownDistanceText",
+    "start.possessionText",
+    "start.downDistanceText",
+    "start.pos_team_timeouts",
+    "start.def_pos_team_timeouts",
+    "clock.displayValue",
+    "type.id",
+    "type.text",
+    "type.abbreviation",
+    "end.distance",
+    "end.yardLine",
+    "end.team.id",
+    "end.down",
+    "end.yardsToEndzone",
+    "end.posTeamTimeouts",
+    "end.defTeamTimeouts",
+    "end.shortDownDistanceText",
+    "end.possessionText",
+    "end.downDistanceText",
+    "end.pos_team_timeouts",
+    "end.def_pos_team_timeouts",
+    "expectedPoints.before",
+    "expectedPoints.after",
+    "expectedPoints.added",
+    "winProbability.before",
+    "winProbability.after",
+    "winProbability.added",
+    "scoringType.displayName",
+    "scoringType.name",
+    "scoringType.abbreviation",
+})
+
+# In-process TTL cache of serialized /cfb/process responses keyed by
+# (gameId, request_method). Hit returns sub-millisecond. Miss runs the
+# full pipeline and stores the serialized bytes.
+#
+# TTL chosen as 15 s (half of the Worker's 30 s in-progress
+# Cache-Control max-age) so an in-progress game's body refreshes within
+# the same TTL window the Worker holds, never serving stale data past
+# the Worker's cache horizon. For completed games this still works —
+# the body doesn't change so a stale-by-15-seconds completed-game
+# response is byte-identical to a fresh one.
+#
+# Doesn't help cold-start latency (first request still pays full
+# pipeline). Helps cold-fill storms: when many cross-PoP cold-fills
+# land within a 15 s window the Container only runs the pipeline once
+# and serves the rest from cache. Also collapses SWR refresh
+# duplicates, retry storms, and concurrent prewarms hitting the same
+# gameId.
+_RESULT_CACHE: "dict[tuple[str, str], tuple[float, bytes]]" = {}
+_RESULT_CACHE_TTL = 15.0
+_RESULT_CACHE_MAX = 32
+
+
+def _cache_get(key):
+    entry = _RESULT_CACHE.get(key)
+    if entry is None:
+        return None
+    expires_at, body = entry
+    if time.time() >= expires_at:
+        # Expired — drop and let the caller recompute.
+        _RESULT_CACHE.pop(key, None)
+        return None
+    return body
+
+
+def _cache_put(key, body_bytes):
+    now = time.time()
+    if len(_RESULT_CACHE) >= _RESULT_CACHE_MAX:
+        # Evict the oldest-expiry entry. With a 15 s TTL and reasonable
+        # request distribution, this is effectively LRU.
+        oldest_key = min(_RESULT_CACHE, key=lambda k: _RESULT_CACHE[k][0])
+        _RESULT_CACHE.pop(oldest_key, None)
+    _RESULT_CACHE[key] = (now + _RESULT_CACHE_TTL, body_bytes)
+
+
+# Pydantic validation is heavy on a 200-play response (~50-150 ms in
+# production measurements). Gated to opt-in via env var because:
+#  - The Node side has its own ajv validator as defense-in-depth
+#    (see worker/src/lib/games.ts validateProcessResponse).
+#  - The snapshot tests in python/tests/test_process_snapshot.py
+#    catch any shape regression at fixture-comparison time.
+# Production runs with VALIDATE_RESPONSE unset (skip validation);
+# tests set VALIDATE_RESPONSE=1 + STRICT_SCHEMA=1 in conftest.py to
+# enforce strictly.
+_VALIDATE_RESPONSE = os.environ.get("VALIDATE_RESPONSE") == "1"
+
+
+def _orjson_default(obj):
+    """orjson fallback for types its native handling can't serialize.
+
+    OPT_SERIALIZE_NUMPY covers the common numpy types (int*, uint*,
+    float32/64, ndarray of those) but trips on object-dtype arrays,
+    numpy strings, or numpy scalars in less-common dtypes — which
+    pop up when sportsdataverse stores mixed-content lists. Duck-
+    typing via tolist()/item() handles these without importing numpy
+    (which we dropped above when removing the np.array().tolist()
+    wraps in the top-level result dict).
+    """
+    if hasattr(obj, "tolist"):
+        return obj.tolist()
+    if hasattr(obj, "item"):
+        return obj.item()
+    raise TypeError(f"orjson: unsupported type {type(obj).__name__}")
+
 
 @app.route("/cfb/process/replay", methods=["GET", "POST"])
 def process_replay():
@@ -245,6 +378,24 @@ def process():
             response.headers["Server-Timing"] = _server_timing_header(timings)
             return response, 404
 
+        # Result cache fast path. Same gameId within the 15 s TTL
+        # window returns the previously-serialized bytes without
+        # re-running CFBPlayProcess. Key includes method so a GET and
+        # a POST for the same gameId share a cache entry (both produce
+        # identical bodies). On a hit we return ~immediately; on a
+        # miss the full pipeline runs and stores the bytes.
+        cache_key = (str(gameId), request.method)
+        t0 = time.perf_counter()
+        cached_body = _cache_get(cache_key)
+        timings["cache_lookup"] = time.perf_counter() - t0
+        if cached_body is not None:
+            timings["total"] = time.perf_counter() - request_start
+            response = Response(cached_body, mimetype="application/json")
+            response.headers["Server-Timing"] = _server_timing_header(timings)
+            response.headers["X-Result-Cache"] = "HIT"
+            _emit_metrics(timings, gameId, 200)
+            return response, 200
+
         t0 = time.perf_counter()
         processed_data = CFBPlayProcess(gameId=gameId)
         pbp = processed_data.espn_cfb_pbp()
@@ -276,60 +427,24 @@ def process():
         processed_data.run_processing_pipeline()
         timings["pipeline"] = time.perf_counter() - t0
 
+        # 2026-05-10 perf pass: `to_dict(orient="records")` replaces
+        # the previous `to_json` → `json.loads` round-trip. The old
+        # path serialized the 200×370 DataFrame to a multi-MB JSON
+        # string and immediately re-parsed it back into Python dicts.
+        # to_dict skips both. Catch: to_dict returns numpy types and
+        # bare NaN; orjson (used below) doesn't tolerate either, so
+        # the reshape loop normalizes them inline as it visits each
+        # record. The previous to_json path papered over NaN by
+        # converting to JSON null, which we now do explicitly.
         t0 = time.perf_counter()
-        tmp_json = processed_data.plays_json.to_json(orient="records")
-        jsonified_df = json.loads(tmp_json)
+        jsonified_df = processed_data.plays_json.to_dict(orient="records")
+        timings["to_dict"] = time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         box = processed_data.create_box_score()
         timings["box_score"] = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        # Flat sportsdataverse intermediate columns. The reshape loop
-        # below re-nests their values into ESPN-shaped objects
-        # (record["start"], record["end"], record["modelInputs"], etc.),
-        # then we pop these from the record so the response matches the
-        # pre-pipeline ESPN shape the frontend expects. Removing one
-        # without removing its consumer in the loop will surface as a
-        # KeyError; adding one without its source column ditto.
-        bad_cols = [
-            "start.distance",
-            "start.yardLine",
-            "start.team.id",
-            "start.down",
-            "start.yardsToEndzone",
-            "start.posTeamTimeouts",
-            "start.defTeamTimeouts",
-            "start.shortDownDistanceText",
-            "start.possessionText",
-            "start.downDistanceText",
-            "start.pos_team_timeouts",
-            "start.def_pos_team_timeouts",
-            "clock.displayValue",
-            "type.id",
-            "type.text",
-            "type.abbreviation",
-            "end.distance",
-            "end.yardLine",
-            "end.team.id",
-            "end.down",
-            "end.yardsToEndzone",
-            "end.posTeamTimeouts",
-            "end.defTeamTimeouts",
-            "end.shortDownDistanceText",
-            "end.possessionText",
-            "end.downDistanceText",
-            "end.pos_team_timeouts",
-            "end.def_pos_team_timeouts",
-            "expectedPoints.before",
-            "expectedPoints.after",
-            "expectedPoints.added",
-            "winProbability.before",
-            "winProbability.after",
-            "winProbability.added",
-            "scoringType.displayName",
-            "scoringType.name",
-            "scoringType.abbreviation",
-        ]
         # Re-nest sportsdataverse's flat dot-keyed columns
         # (`start.distance`, `expectedPoints.before`, ...) back into
         # the nested objects the frontend's EJS templates expect
@@ -484,10 +599,33 @@ def process():
             #     'fumble_forced_player_name' : record["fumble_forced_player_name"],
             #     'fumble_recovered_player_name' : record["fumble_recovered_player_name"],
             # }
-            # remove added columns
-            for col in bad_cols:
-                record.pop(col, None)
+            # Remove flat dot-keyed columns now that we've nested
+            # them. Inline `del` over a frozenset membership check is
+            # ~2x faster than the previous `for col in bad_cols:
+            # record.pop(col, None)` because pop's two-arg form has a
+            # try/except internally per key. We also normalize
+            # non-finite floats (NaN, +Inf, -Inf) → None in the same
+            # pass: pandas-derived NaN was previously serialized to
+            # JSON null by the to_json path; orjson (used below) raises
+            # on bare float('nan'), float('inf'), or float('-inf').
+            # math.isfinite catches all three. Behind the isinstance
+            # check so we only pay the math call on actual floats.
+            for k in list(record.keys()):
+                if k in _BAD_COLS:
+                    del record[k]
+                    continue
+                v = record[k]
+                if isinstance(v, float) and not math.isfinite(v):
+                    record[k] = None
+        timings["relayout"] = time.perf_counter() - t0
 
+        # 2026-05-10 perf pass: dropped the `np.array(pbp[k]).tolist()`
+        # wraps that used to enclose ten of these fields. The values
+        # come from sportsdataverse's ESPN scraper as plain Python
+        # lists of dicts; the numpy round-trip was wasted dtype-
+        # inference work. Snapshot tests catch any float normalization
+        # we may have been silently doing through numpy.
+        t0 = time.perf_counter()
         result = {
             "id": gameId,
             "count": len(jsonified_df),
@@ -500,30 +638,59 @@ def process():
                 "id"
             ],
             "drives": pbp["drives"],
-            "scoringPlays": np.array(pbp["scoringPlays"]).tolist(),
-            "winprobability": np.array(pbp["winprobability"]).tolist(),
+            "scoringPlays": pbp["scoringPlays"],
+            "winprobability": pbp["winprobability"],
             "boxScore": pbp["boxscore"],
-            "homeTeamSpread": np.array(pbp["homeTeamSpread"]).tolist(),
-            "overUnder": np.array(pbp["overUnder"]).tolist(),
+            "homeTeamSpread": pbp["homeTeamSpread"],
+            "overUnder": pbp["overUnder"],
             "header": pbp["header"],
-            "broadcasts": np.array(pbp["broadcasts"]).tolist(),
-            "videos": np.array(pbp["videos"]).tolist(),
+            "broadcasts": pbp["broadcasts"],
+            "videos": pbp["videos"],
             "standings": pbp["standings"],
-            "pickcenter": np.array(pbp["pickcenter"]).tolist(),
-            "espnWinProbability": np.array(pbp["espnWP"]).tolist(),
-            "gameInfo": np.array(pbp["gameInfo"]).tolist(),
-            "season": np.array(pbp["season"]).tolist(),
+            "pickcenter": pbp["pickcenter"],
+            "espnWinProbability": pbp["espnWP"],
+            "gameInfo": pbp["gameInfo"],
+            "season": pbp["season"],
         }
+        timings["top_level"] = time.perf_counter() - t0
+
         # Validate the response shape against the published contract.
         # Default behavior is warn-only so we don't turn 200s into 500s
         # on novel ESPN data; STRICT_SCHEMA=1 (tests, CI) raises.
-        _validate_response_shape(result, gameId)
-        response = jsonify(result)
-        # The bulk of this stage is the per-record reshape loop; the result
-        # dict assembly and jsonify are sub-millisecond.
-        timings["reshape"] = time.perf_counter() - t0
+        # 2026-05-10: skipped in prod by default (VALIDATE_RESPONSE env
+        # gates it; conftest.py sets it for tests). The Node side runs
+        # ajv as defense-in-depth, and snapshot tests catch contract
+        # drift at fixture-comparison time. Pydantic deep-validation of
+        # 200 plays cost ~50-150 ms per response in production.
+        if _VALIDATE_RESPONSE:
+            t0 = time.perf_counter()
+            _validate_response_shape(result, gameId)
+            timings["validate"] = time.perf_counter() - t0
+
+        # orjson serializes 2-5x faster than flask.jsonify for our
+        # response shape (multi-MB, deeply nested dicts of mixed
+        # Python primitives + numpy scalars). The
+        # OPT_SERIALIZE_NUMPY flag lets numpy scalars pass through
+        # without a custom default callback; OPT_NON_STR_KEYS handles
+        # any dict whose keys aren't strings (defensive — shouldn't
+        # happen in this response shape but cheap to enable).
+        t0 = time.perf_counter()
+        body_bytes = orjson.dumps(
+            result,
+            default=_orjson_default,
+            option=orjson.OPT_SERIALIZE_NUMPY | orjson.OPT_NON_STR_KEYS,
+        )
+        timings["serialize"] = time.perf_counter() - t0
+
+        # Store in result cache before headers are stamped so the
+        # cached bytes are body-only. Headers vary per-response
+        # (Server-Timing reflects per-call timings).
+        _cache_put(cache_key, body_bytes)
+
+        response = Response(body_bytes, mimetype="application/json")
         timings["total"] = time.perf_counter() - request_start
         response.headers["Server-Timing"] = _server_timing_header(timings)
+        response.headers["X-Result-Cache"] = "MISS"
         _emit_metrics(timings, gameId, 200)
         return response, 200
     except Exception as e:

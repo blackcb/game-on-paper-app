@@ -9,6 +9,10 @@ import pytest
 # /cfb/process response shape immediately fails the offending test.
 # Production keeps the default warn-only behavior.
 os.environ.setdefault("STRICT_SCHEMA", "1")
+# 2026-05-10 perf pass: validation is opt-in in production via this
+# env var. Force it on for tests so STRICT_SCHEMA still gates as it
+# did before. Without VALIDATE_RESPONSE the validate path is dead code.
+os.environ.setdefault("VALIDATE_RESPONSE", "1")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

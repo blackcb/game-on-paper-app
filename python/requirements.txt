@@ -28,3 +28,8 @@ sportsdataverse==0.0.36.3.3
 # python/schemas.py. Pydantic 2's model_json_schema() output is fed
 # to ajv on the Node side via shared/process-response.schema.json.
 pydantic>=2,<3
+# 2026-05-10 perf pass: orjson replaces flask.jsonify for /cfb/process.
+# Stdlib json is slow on multi-MB nested dicts with numpy scalars
+# (every np.float64 takes a Python-level default callback); orjson is
+# 2-5× faster and handles numpy natively via OPT_SERIALIZE_NUMPY.
+orjson>=3.10,<4
