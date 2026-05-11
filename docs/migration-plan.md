@@ -3085,20 +3085,23 @@ Items still gated on burn-in success + 1 week of stable production
 (target ~2026-05-17):
 
 - ~~Stop droplet (USER ACTION, DigitalOcean dashboard).~~ **AMENDED
-  2026-05-10**: droplet stays up indefinitely as the public origin
-  for the Architecture B fetch+cf path. See Phase 3F below.
-- ~~Destroy droplet, archive `fork-deploy.yml`.~~ **AMENDED**: don't
-  destroy. `fork-deploy.yml` can be slimmed to only deploy Python
-  (skip frontend/redis/caddy build steps), but the workflow stays
-  active so Python gets updated on push.
-- Archive `docker-compose*.yml`; delete `redis/Dockerfile.*` and
-  `redis/*.conf`. **Still pending** but no longer blocks droplet
-  decommission (which itself is no longer happening); slim
-  `fork-deploy.yml` first so it stops consuming these files,
-  then archive.
-- Second pass on CLAUDE.md + README.md to remove the transition
-  notes and legacy paragraphs. **Partially landed 2026-05-10**:
-  CLAUDE.md updated to reflect droplet-stays-up-as-Python-origin.
+  2026-05-10, RE-AMENDED 2026-05-11**: original plan was "stop the
+  droplet"; 2026-05-10 amendment said "droplet stays up as B's
+  origin"; 2026-05-11 re-amendment shipped the Worker proxy at
+  python.unseen-university.org so the droplet is once again
+  decommissionable. See Phase 3G below.
+- ~~Destroy droplet, archive `fork-deploy.yml`.~~ **DONE 2026-05-11**:
+  fork-deploy.yml slimmed to just python-test. The build/deploy/e2e/
+  lighthouse jobs (all droplet-coupled) are deleted. Droplet
+  power-off is a USER ACTION pending.
+- ~~Archive `docker-compose*.yml`; delete `redis/Dockerfile.*` and
+  `redis/*.conf`.~~ **DONE 2026-05-11**: deleted entirely in the
+  cleanup PR, alongside `frontend/`, `redis/`, `caddy/`, and
+  `.github/workflows/e2e.yml`. ~270 MB of legacy code retired.
+- ~~Second pass on CLAUDE.md + README.md to remove the transition
+  notes and legacy paragraphs.~~ **DONE 2026-05-11**: rewritten in
+  the cleanup PR to describe the post-droplet architecture as the
+  steady state.
 
 #### 3F — Architecture B: tiered cache for /cfb/game/:gameId (DONE 2026-05-10)
 
@@ -3162,6 +3165,37 @@ droplet down later, either:
   `wrangler containers delete` drops the Python Container.
 - Slim `fork-deploy.yml` to only deploy Python (drop the
   frontend/redis/caddy matrix entries).
+
+#### 3G — Worker proxy at python.unseen-university.org (DONE 2026-05-11)
+
+Followup to 3F. The 3F decision to keep the droplet up as Architecture
+B's public Python origin turned out to be the wrong amendment to
+Phase 3E — the real fix was to put the **Worker** at
+`python.unseen-university.org` instead of the droplet.
+
+What shipped:
+
+- New Hono middleware at the top of `worker/src/index.tsx`. Matches
+  on the request URL's hostname; for `python.unseen-university.org`
+  it validates `X-Worker-Secret` and forwards the request to the
+  `PythonContainer` Durable Object via service binding. For any
+  other hostname it falls through to the existing route table.
+- Cloudflare Worker route `python.unseen-university.org/*` →
+  `sports` (registered via CF API; id `0e295fc88b5b4697ad25a2a2aa0ad71f`).
+  DNS for that hostname was already CF-proxied, so the route engaged
+  immediately.
+- `.github/workflows/fork-deploy.yml` slimmed: dropped the build /
+  deploy / e2e / lighthouse jobs (all droplet-coupled). Kept just
+  python-test as a pytest + schema-freshness gate.
+- `frontend/`, `redis/`, `caddy/`, `docker-compose*.yml`, and
+  `.github/workflows/e2e.yml` deleted in a follow-up cleanup PR.
+
+Production smoke confirmed end-to-end: `/cfb/game/:gameId` requests
+flow user → CF edge → main Worker → `fetch+cf` to
+python.unseen-university.org → CF tiered cache → Worker proxy →
+service binding → Container → Python. Droplet no longer in the path.
+
+The droplet power-off remains a USER ACTION pending in Phase 3E above.
 
 ### Acceptance
 

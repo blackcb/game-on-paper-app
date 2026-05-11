@@ -52,25 +52,9 @@ cd worker && npx wrangler deploy
 ```
 
 CI: [`.github/workflows/fork-deploy.yml`](.github/workflows/fork-deploy.yml)
-deploys the legacy Docker stack to the rollback droplet on every push to
-`instrument-plus-cloudflare-cdn`; that workflow goes away with the
-droplet decommission.
-
-## Legacy Docker stack (transitional, retiring ~2026-05-17)
-
-Until the rollback droplet is decommissioned, the original
-Express+Flask+Redis stack still builds and deploys. To run a full
-local mirror of the rollback environment:
-
-```Shell
-docker compose -f docker-compose.fork.yml pull
-docker compose -f docker-compose.fork.yml up --build
-```
-
-Frontend on `localhost:8000`, Python on `localhost:7000`.
-This path is deprecated — once Phase 3E decommission completes,
-`frontend/`, `redis/`, the `docker-compose*.yml` files, and
-`fork-deploy.yml` all go away.
+runs pytest + schema-freshness on every push to
+`instrument-plus-cloudflare-cdn`. Worker + Container deploys are
+manual (`wrangler deploy`).
 
 See [docs/migration-plan.md](docs/migration-plan.md) for the
-full migration history and decommission checklist.
+multi-phase history that got us here.

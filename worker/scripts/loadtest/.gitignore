@@ -1,0 +1,12 @@
+# Terraform state, lambda bundle, npm lockfile, run artifacts.
+# All regenerate on demand; not worth keeping in git.
+lambda/.terraform/
+lambda/.terraform.lock.hcl
+lambda/lambda.zip
+lambda/package-lock.json
+lambda/terraform.tfstate
+lambda/terraform.tfstate.backup
+# Run results + analysis are kept on an ad-hoc basis — uncomment to
+# version them if you want to preserve a specific run's output.
+results/
+analysis/

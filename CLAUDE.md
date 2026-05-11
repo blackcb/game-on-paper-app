@@ -47,17 +47,12 @@ Cloudflare Workers + Containers.
 Deploy: `cd worker && wrangler deploy`. Production hostname is
 `sports.unseen-university.org` (Cloudflare Workers route).
 
-> **Droplet stays up indefinitely (revised 2026-05-10)**: the
-> Architecture B migration uses the droplet's `python.unseen-university.org`
-> as the tiered-cache origin. Phase 3E (decommission) was originally
-> scoped to take the whole droplet down ~2026-05-17; that's now
-> amended — `frontend/`, `redis/`, `caddy/`, and `docker-compose*.yml`
-> can still be removed (the rollback path no longer needs them), but
-> the Python container at `python.unseen-university.org` remains the
-> public origin for the Architecture B fetch+cf path. If the droplet
-> is decommissioned later, the Python public URL has to be re-homed
-> to a Worker proxy in front of the Cloudflare Container, OR
-> PYTHON_FETCH_MODE rolls back to "service". See
+> **Droplet retired 2026-05-11**: `python.unseen-university.org` now
+> resolves to a Worker route on the `sports` Worker that service-binds
+> to the `PythonContainer`. The legacy `frontend/`, `redis/`, `caddy/`,
+> `docker-compose*.yml`, and `.github/workflows/e2e.yml` were deleted
+> in the same pass. Once you've powered off the DigitalOcean droplet
+> via the DO dashboard, that infra is fully retired. See
 > [docs/migrate-to-tiered-cache.md](docs/migrate-to-tiered-cache.md).
 
 ## Active work
@@ -98,7 +93,6 @@ their files are preserved as historical record.
   ([worker/src/](worker/src/), via ajv) is currently warn-only and
   has known drift on the `id` field (Python returns string, schema
   expects integer). Tracked in the migration-plan Future backlog.
-- During the burn-in window, `frontend/` and `redis/` are still
-  built + deployed by `fork-deploy.yml`. Don't delete files in those
-  trees yet — they're load-bearing for the rollback path until
-  ~2026-05-17.
+- The fork-deploy workflow is now just pytest + schema-freshness;
+  the legacy build/deploy/e2e/lighthouse jobs were removed when the
+  droplet was retired.
