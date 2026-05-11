@@ -128,7 +128,18 @@ SEASON_MODE = "normal"
 # Bumped to "1" alongside the 3D cutover so weekday-deployed-on-Sat
 # fallback works without a separate flip.
 CRON_WARM_ENABLED = "1"
-PREWARM_TOP_N = "0"
+# Layer C pre-warm. Enabled 2026-05-11 at N=5 — pulls the top 5
+# in-progress / upcoming games from the cron-warmed scoreboard every
+# 3rd minute during the game window and self-fetches them, so the
+# Worker's caches.default + the fetch+cf tiered cache both stay hot
+# for real user clicks. See lib/cron.ts:107-222.
+#
+# Gated by isGameWindow() (cron.ts:26-37) — only fires Sat-afternoon
+# + Sun-early-morning + Tue–Sat weekday-night windows. Off-season
+# (today, May) this stays a no-op; the flip takes effect when football
+# season opens. Watch `event:prewarm` lines in Workers Logs once games
+# start.
+PREWARM_TOP_N = "5"
 # Layer C self-fetch target. The Worker is bound to this hostname via
 # Cloudflare Routes; cron-fired prewarms hit it from inside the
 # Worker so the response lands in caches.default at the cron-firing
