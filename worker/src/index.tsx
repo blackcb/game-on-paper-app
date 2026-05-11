@@ -21,6 +21,7 @@ import {
   type ProcessedGameData,
   type TieredFetchMetadata,
 } from "./lib/games";
+import { readCachedGameHtml, writeCachedGameHtml } from "./lib/html-cache";
 import {
   getCachedCurrentScoreboard,
   getGames,
@@ -971,6 +972,50 @@ app.get("/cfb/game/:gameId", async (c) => {
     return response;
   }
 
+  // Layer 3 cache: KV-backed completed-game HTML cache. Completed
+  // games are byte-stable; once we've rendered one anywhere globally,
+  // every other PoP can serve from KV (~80 ms) instead of paying the
+  // ~5 s Python pipeline. Gated on the ESPN probe saying the game
+  // is completed (so we know the cached HTML, if present, is still
+  // valid for this gameId).
+  //
+  // `caches.default` (Layer 1, per-PoP, 1y) sits in front of this.
+  // KV (Layer 3) only fires when Layer 1 misses — typically the
+  // "first user in this PoP for this game" case. The JSON tiered
+  // cache (Layer 2, 30s) doesn't help here because completed games'
+  // HTML doesn't change but the tiered TTL is shorter than caches.default.
+  //
+  // Skip for ?json=1 — the JSON-shortcut path returns raw data, not
+  // rendered HTML, and isn't on the user-experience critical path.
+  // Skip for in-progress games — their HTML is volatile.
+  const completedPerEspn = competition.status?.type?.completed === true;
+  const htmlCacheEligible = completedPerEspn && !isJsonShortcut;
+  let kvHtml: string | null = null;
+  if (htmlCacheEligible) {
+    try {
+      kvHtml = await time(c, "kv_html", async () =>
+        await readCachedGameHtml(c.env.LEAGUE_DATA, gameId),
+      );
+    } catch (err) {
+      // KV read failures shouldn't break the page — fall through to
+      // the normal pipeline. Logged for visibility.
+      console.log(
+        JSON.stringify({
+          event: "kv_html_read_failure",
+          gameId,
+          error: (err as Error).message,
+        }),
+      );
+    }
+  }
+  if (kvHtml != null) {
+    const response = cachedHtmlWithHeaders(kvHtml, CACHE_CONTROL.completed, {
+      "x-html-cache": "HIT",
+    });
+    c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
+  }
+
   // Past or live game → fetch processed PBP via Python. Errors
   // render game_error with explicit no-store so the standard
   // cache (per Cache Rule from 2I) won't hold the failure past
@@ -1030,6 +1075,11 @@ app.get("/cfb/game/:gameId", async (c) => {
   if (tieredMeta.upstreamCacheStatus) {
     extraHeaders["x-upstream-cache"] = tieredMeta.upstreamCacheStatus;
   }
+  if (htmlCacheEligible) {
+    // Reached here because the KV layer missed — flag MISS for
+    // observability so analysis can compute the KV-hit rate.
+    extraHeaders["x-html-cache"] = "MISS";
+  }
 
   if (isJsonShortcut) {
     const response = cachedJsonWithHeaders(data, cacheControl, extraHeaders);
@@ -1059,6 +1109,25 @@ app.get("/cfb/game/:gameId", async (c) => {
   );
   const response = cachedHtmlWithHeaders(html, cacheControl, extraHeaders);
   c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  // Write to KV for completed games. Confirmed by data.gameInfo this
+  // time (not just the ESPN probe) so a game that finished BETWEEN the
+  // probe and the Python fetch still gets correctly classified. The
+  // `completed` flag is set from `data.gameInfo.status.type.completed`
+  // above. KV write is fire-and-forget — failure is logged but doesn't
+  // block the response.
+  if (completed && htmlCacheEligible) {
+    c.executionCtx.waitUntil(
+      writeCachedGameHtml(c.env.LEAGUE_DATA, gameId, html).catch((err) => {
+        console.log(
+          JSON.stringify({
+            event: "kv_html_write_failure",
+            gameId,
+            error: (err as Error).message,
+          }),
+        );
+      }),
+    );
+  }
   return response;
 });
 
