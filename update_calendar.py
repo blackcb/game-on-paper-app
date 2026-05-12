@@ -28,10 +28,12 @@ def get_calendar(year: int):
 
     return weeks
 
-# update this to any arbitrary year and add it to frontend/cfb/schedule.json to update the weeks available in the switcher.
+# Bump the upper bound to a future year to extend the week switcher.
+# Output is read at Worker build time via a TypeScript JSON import in
+# worker/src/lib/schedule.ts.
 result = {}
 for yr in tqdm(range(2002, 2026)):
     result[yr] = get_calendar(yr)
 
-with open("./frontend/cfb/schedule.json", "w") as f:
+with open("./worker/src/data/schedule.json", "w") as f:
     f.write(json.dumps(result))

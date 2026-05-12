@@ -74,18 +74,17 @@ jobs:
           expected = _dump_schema()
           targets = [
               '../shared/process-response.schema.json',
-              '../frontend/cfb/process-response.schema.json',
           ]
-          drifted = []
-          for path in targets:
-              if not Path(path).exists():
-                  # frontend/ may be deleted post-droplet-retirement;
-                  # tolerate missing copies.
-                  continue
-              committed = Path(path).read_text(encoding='utf-8')
-              if committed != expected:
-                  drifted.append(path)
+          missing = [p for p in targets if not Path(p).exists()]
+          if missing:
+              for p in missing:
+                  print(f'::error file={p}::schema target missing — drift gate would be a no-op')
+              sys.exit(1)
 
+          drifted = [
+              p for p in targets
+              if Path(p).read_text(encoding='utf-8') != expected
+          ]
           if drifted:
               for p in drifted:
                   print(f'::error file={p}::JSON Schema drifted from schemas.py output')

@@ -1,5 +1,13 @@
 # Replica deploy plan
 
+> **Historical snapshot (2026-04-28).** Preserved for the chain of
+> decisions that led to the current architecture. Paths referenced
+> here — `frontend/`, `redis/`, `caddy/`, `docker-compose*.yml`,
+> `fork-deploy.yml`'s build/deploy/e2e jobs — were deleted on
+> 2026-05-11; the droplet at 137.184.138.84 was retired the same day.
+> See [migration-plan.md §3G](migration-plan.md) for what replaced
+> them.
+
 Stand up `sports.unseen-university.org` as a parallel testing environment that
 mirrors upstream production (DigitalOcean droplet running the existing Docker
 Compose stack), fronted by Cloudflare for DNS + TLS, with GitHub Actions
