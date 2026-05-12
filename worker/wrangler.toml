@@ -118,7 +118,7 @@ SUMMARY_BACKEND = "container"
 # 2026-05-10. Rollback: flip back to "service" + redeploy (~30s).
 # See docs/migrate-to-tiered-cache.md and the load-test report at
 # worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md.
-PYTHON_FETCH_MODE = "service"
+PYTHON_FETCH_MODE = "tiered"
 # 3B sleepAfter driver (read by Container subclass in src/containers.ts).
 # This file is the "normal" weekday-in-season profile.
 SEASON_MODE = "normal"
