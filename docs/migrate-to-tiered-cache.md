@@ -1,5 +1,13 @@
 # Migration: Architecture A → Architecture B (tiered cache via fetch+cf)
 
+> **Historical snapshot (2026-05-10).** Captures the in-flight state
+> of the Architecture B cutover. The "droplet stays up as B's public
+> origin" decision recorded below was re-amended on 2026-05-11 by the
+> Worker-proxy swap at `python.unseen-university.org`; see
+> [migration-plan.md §3G](migration-plan.md) for the final shape.
+> The legacy `frontend/`, `redis/`, and `caddy/` paths referenced
+> here were deleted in the 2026-05-11 cleanup.
+
 Status: **in flight, 2026-05-10**.
 See [`worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md`](../worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md)
 for the load-test data that justifies this migration.
