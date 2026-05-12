@@ -221,6 +221,10 @@ _BAD_COLS = frozenset({
 _RESULT_CACHE: "dict[tuple[str, str], tuple[float, bytes]]" = {}
 _RESULT_CACHE_TTL = 15.0
 _RESULT_CACHE_MAX = 32
+# Image-digest churn marker (2026-05-12 incident): the running Container
+# DO instance went into a "Network connection lost" loop in its alarm
+# callback. Bumping the digest forces CF to pull a fresh image and
+# re-instantiate. Comment is load-bearing only at build time.
 
 
 def _cache_get(key):

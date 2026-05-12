@@ -169,20 +169,32 @@ app.use("*", async (c, next) => {
     await next();
     return;
   }
+  const incoming = new URL(c.req.url);
+  // 2026-05-12 incident instrumentation: trace every step of the
+  // proxy path so we can tell from Workers Logs whether requests are
+  // reaching the service binding or hanging earlier. Keep until the
+  // incident is closed, then trim.
+  console.log(JSON.stringify({
+    event: "proxy_in",
+    path: incoming.pathname,
+    query: incoming.search,
+    method: c.req.method,
+  }));
   // Secret check. Treats missing secret config as "fail closed" —
   // production sets WORKER_SHARED_SECRET via wrangler secret put;
   // local dev sets it in .dev.vars.
   const secret = c.req.header("x-worker-secret");
   if (!c.env.WORKER_SHARED_SECRET || secret !== c.env.WORKER_SHARED_SECRET) {
+    console.log(JSON.stringify({ event: "proxy_unauthorized" }));
     return c.text("unauthorized", 401);
   }
   if (!c.env.PYTHON_CONTAINER) {
+    console.log(JSON.stringify({ event: "proxy_no_binding" }));
     return c.text("python container binding unavailable", 503);
   }
   // Forward to the Container via service binding. The Container's
   // HTTP server keys off path+query+method+body; the http://container
   // origin is a Cloudflare-convention placeholder.
-  const incoming = new URL(c.req.url);
   const stub = getContainer(c.env.PYTHON_CONTAINER);
   const forwarded = new Request(
     `http://container${incoming.pathname}${incoming.search}`,
@@ -195,7 +207,24 @@ app.use("*", async (c, next) => {
           : c.req.raw.body,
     },
   );
-  return await stub.fetch(forwarded);
+  console.log(JSON.stringify({ event: "proxy_pre_fetch" }));
+  const t0 = Date.now();
+  try {
+    const response = await stub.fetch(forwarded);
+    console.log(JSON.stringify({
+      event: "proxy_post_fetch",
+      ms: Date.now() - t0,
+      status: response.status,
+    }));
+    return response;
+  } catch (err) {
+    console.log(JSON.stringify({
+      event: "proxy_fetch_error",
+      ms: Date.now() - t0,
+      error: (err as Error).message,
+    }));
+    throw err;
+  }
 });
 
 app.get("/", (c) => c.redirect("/cfb/"));
