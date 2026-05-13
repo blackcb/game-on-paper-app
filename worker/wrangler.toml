@@ -109,16 +109,25 @@ SUMMARY_BASE_URL = "https://summary.unseen-university.org"
 # in 3D (2026-05-08). See worker/SEASON-MODES.md.
 PYTHON_BACKEND = "container"
 SUMMARY_BACKEND = "container"
-# Architecture B migration (2026-05-10). Read by index.tsx's
-# /cfb/game/:gameId handler. "service" = pre-2026-05-10 path
-# (caches.default at the Worker + service-binding to the Container).
-# "tiered" = Architecture B path (fetch+cf to PYTHON_BASE_URL with
-# cacheEverything+cacheTtlByStatus, so the JSON response participates
-# in CF's standard cache + Smart Tiered Cache). Cut over to "tiered"
-# 2026-05-10. Rollback: flip back to "service" + redeploy (~30s).
-# See docs/migrate-to-tiered-cache.md and the load-test report at
-# worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md.
-PYTHON_FETCH_MODE = "service"
+# Architecture B (2026-05-10 cutover, re-cut over 2026-05-13). Read by
+# index.tsx's /cfb/game/:gameId handler. "service" = pre-2026-05-10
+# path (caches.default at the Worker + service-binding to the
+# Container). "tiered" = Architecture B path (fetch+cf to
+# PYTHON_BASE_URL with cacheEverything+cacheTtlByStatus, so the JSON
+# response participates in CF's standard cache + Smart Tiered Cache).
+#
+# Phase 3H (2026-05-13): the python.unseen-university.org endpoint
+# was moved to a separate Worker (sports-python-proxy) so the
+# fetch+cf here crosses a Worker boundary and CF cache engages. Same-
+# Worker self-fetch (Phase 3G architecture, 2026-05-11) bypassed the
+# cache and broke cross-PoP pooling; the 2026-05-12 incident rolled
+# this back to "service" until the proxy split shipped. See
+# docs/migration-plan.md Phase 3H.
+#
+# Rollback: flip back to "service" + redeploy (~30s). That path stays
+# wired to the local PythonContainer DO regardless of what's serving
+# python.unseen-university.org.
+PYTHON_FETCH_MODE = "tiered"
 # 3B sleepAfter driver (read by Container subclass in src/containers.ts).
 # This file is the "normal" weekday-in-season profile.
 SEASON_MODE = "normal"

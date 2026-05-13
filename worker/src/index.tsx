@@ -2,7 +2,6 @@
 // docs/migration-plan.md sub-phase 2B; this file wires them up.
 
 import { Hono, type Context } from "hono";
-import { getContainer } from "@cloudflare/containers";
 import { getGlossary } from "./lib/glossary";
 import {
   getPercentileKey,
@@ -148,84 +147,6 @@ const app = new Hono<{ Bindings: Bindings }>();
 // `espn_pbp`, `kv_lookup`, `summary`, `render`, `total`) so the
 // perf-plan baselines in docs/perf-plan.md stay 1:1 comparable.
 app.use("*", timingMiddleware());
-
-// python.unseen-university.org proxy. Architecture B's tiered-cache
-// fetch path targets this hostname (see lib/games.ts
-// fetchAndShapePBPTiered). Pre-2026-05-11 this hostname pointed at
-// the DigitalOcean droplet's Caddy → Flask stack; this middleware
-// replaces that with a Worker-route + service-binding to the CF
-// Container, so we can decommission the droplet entirely. Caddy used
-// to enforce X-Worker-Secret; we enforce the same here.
-//
-// The handler runs BEFORE the rest of the Hono routes so the main
-// `sports.unseen-university.org` route table is unaffected.
-app.use("*", async (c, next) => {
-  // Use the request URL's hostname rather than the Host header — Host
-  // can be normalized or rewritten by CF, and in the vitest pool
-  // SELF.fetch doesn't always preserve it. The URL is constructed from
-  // the request line, which is reliable.
-  const host = new URL(c.req.url).hostname;
-  if (host !== "python.unseen-university.org") {
-    await next();
-    return;
-  }
-  const incoming = new URL(c.req.url);
-  // 2026-05-12 incident instrumentation: trace every step of the
-  // proxy path so we can tell from Workers Logs whether requests are
-  // reaching the service binding or hanging earlier. Keep until the
-  // incident is closed, then trim.
-  console.log(JSON.stringify({
-    event: "proxy_in",
-    path: incoming.pathname,
-    query: incoming.search,
-    method: c.req.method,
-  }));
-  // Secret check. Treats missing secret config as "fail closed" —
-  // production sets WORKER_SHARED_SECRET via wrangler secret put;
-  // local dev sets it in .dev.vars.
-  const secret = c.req.header("x-worker-secret");
-  if (!c.env.WORKER_SHARED_SECRET || secret !== c.env.WORKER_SHARED_SECRET) {
-    console.log(JSON.stringify({ event: "proxy_unauthorized" }));
-    return c.text("unauthorized", 401);
-  }
-  if (!c.env.PYTHON_CONTAINER) {
-    console.log(JSON.stringify({ event: "proxy_no_binding" }));
-    return c.text("python container binding unavailable", 503);
-  }
-  // Forward to the Container via service binding. The Container's
-  // HTTP server keys off path+query+method+body; the http://container
-  // origin is a Cloudflare-convention placeholder.
-  const stub = getContainer(c.env.PYTHON_CONTAINER);
-  const forwarded = new Request(
-    `http://container${incoming.pathname}${incoming.search}`,
-    {
-      method: c.req.method,
-      headers: c.req.raw.headers,
-      body:
-        c.req.method === "GET" || c.req.method === "HEAD"
-          ? undefined
-          : c.req.raw.body,
-    },
-  );
-  console.log(JSON.stringify({ event: "proxy_pre_fetch" }));
-  const t0 = Date.now();
-  try {
-    const response = await stub.fetch(forwarded);
-    console.log(JSON.stringify({
-      event: "proxy_post_fetch",
-      ms: Date.now() - t0,
-      status: response.status,
-    }));
-    return response;
-  } catch (err) {
-    console.log(JSON.stringify({
-      event: "proxy_fetch_error",
-      ms: Date.now() - t0,
-      error: (err as Error).message,
-    }));
-    throw err;
-  }
-});
 
 app.get("/", (c) => c.redirect("/cfb/"));
 

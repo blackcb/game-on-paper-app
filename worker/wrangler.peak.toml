@@ -49,6 +49,9 @@ PYTHON_BASE_URL = "https://python.unseen-university.org"
 SUMMARY_BASE_URL = "https://summary.unseen-university.org"
 PYTHON_BACKEND = "container"
 SUMMARY_BACKEND = "container"
+# Architecture B (Phase 3H, 2026-05-13). See wrangler.toml for the
+# full rationale; peak mode runs the same mode value.
+PYTHON_FETCH_MODE = "tiered"
 SEASON_MODE = "peak"
 CRON_WARM_ENABLED = "1"
 PREWARM_TOP_N = "10"
