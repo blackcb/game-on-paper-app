@@ -185,6 +185,23 @@ describe("/cfb/ scoreboard route", () => {
     expect(body).toContain(">ALA<");
   });
 
+  it("omits the site-wide nav-header (matches upstream gameonpaper.com)", async () => {
+    // The legacy `frontend/views/pages/cfb/index.ejs` deliberately did
+    // not include `nav-header.ejs`; the live upstream still ships that
+    // way. Without `hideHeader` the page renders two "Game on Paper"
+    // branding sections AND two elements sharing `id="game-id-form"` /
+    // `id="inputGameId"` (invalid HTML). Guard against re-introducing
+    // either.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      jsonResponse({ events: [sampleGame()] }),
+    );
+    const res = await SELF.fetch("http://localhost/cfb/");
+    const body = await res.text();
+    expect(body).not.toContain("blog-header-logo");
+    expect(body.match(/id="game-id-form"/g)?.length ?? 0).toBe(1);
+    expect(body.match(/id="inputGameId"/g)?.length ?? 0).toBe(1);
+  });
+
   it("shows 'No games scheduled' when ESPN returns an empty event list", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({ events: [] }));
     const res = await SELF.fetch("http://localhost/cfb/");

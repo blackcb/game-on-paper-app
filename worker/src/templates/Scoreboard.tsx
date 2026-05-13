@@ -187,6 +187,7 @@ export const ScoreboardPage: FC<Props> = ({
       canonical={canonical}
       extraHead={extraHead}
       extraScripts={extraScripts}
+      hideHeader={true}
     >
       <div class="container">
         <div class="row text-center mb-3">

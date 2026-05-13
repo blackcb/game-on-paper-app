@@ -15,6 +15,14 @@ interface LayoutProps {
   // them into a single slot keeps the per-page JSX focused on body.
   extraHead?: Child;
   extraScripts?: Child;
+  // Skip the site-wide nav header (branding + nav links + search box).
+  // The legacy EJS scoreboard (`frontend/views/pages/cfb/index.ejs`)
+  // deliberately omitted `nav-header.ejs` — only inner pages included
+  // it — and the live upstream gameonpaper.com still ships that way.
+  // Without this opt-out the scoreboard would render two stacked
+  // "Game on Paper" sections plus duplicate `id="game-id-form"` /
+  // `id="inputGameId"` elements (invalid HTML).
+  hideHeader?: boolean;
   children?: Child;
 }
 
@@ -26,6 +34,7 @@ export const Layout: FC<LayoutProps> = ({
   canonical,
   extraHead,
   extraScripts,
+  hideHeader,
   children,
 }) => {
   return (
@@ -58,6 +67,8 @@ export const Layout: FC<LayoutProps> = ({
         {extraHead}
       </head>
       <body>
+        {!hideHeader && (
+          <>
         <header class="p-3 mb-3 border-bottom">
           <div class="container">
             <div class="d-flex flex-wrap align-items-center justify-content-center justify-content-lg-start">
@@ -126,6 +137,8 @@ export const Layout: FC<LayoutProps> = ({
             });`,
           }}
         ></script>
+          </>
+        )}
 
         {children}
 
