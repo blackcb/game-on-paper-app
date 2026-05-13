@@ -590,7 +590,11 @@ img.team-logo-61 { content: url('/assets/img/ennui-uga.png'); }`;
         <header class="blog-header py-3 mb-3">
           <div class="row flex-nowrap justify-content-between align-items-center">
             <div class="col-2 pt-1">
-              <a class="btn btn-sm btn-outline-primary align-middle" href="/">
+              <a
+                class="btn btn-sm btn-outline-primary align-middle"
+                href="/"
+                onclick="if (document.referrer) { event.preventDefault(); history.back(); }"
+              >
                 <i class="bi-arrow-left"></i>
               </a>
             </div>

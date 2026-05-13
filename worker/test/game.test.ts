@@ -278,6 +278,21 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     expect(body).toContain("var gameData =");
   });
 
+  it("back-arrow button does history.back() if there's a referrer, else / fallback", async () => {
+    // Inline progressive-enhancement on the bi-arrow-left button:
+    // keep `href="/"` for no-JS / direct hits, but onclick falls
+    // back to history.back() when a referrer exists so the user
+    // returns to whatever scoreboard they came from (year/week
+    // selection preserved) instead of being snapped to the current
+    // week. Same markup on Game / Pregame / GameError templates.
+    const id = uniqueGameId();
+    mockEspnThenPython(undefined, pythonPbpResponse());
+    const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
+    const body = await res.text();
+    expect(body).toMatch(/bi-arrow-left/);
+    expect(body).toContain('onclick="if (document.referrer) { event.preventDefault(); history.back(); }"');
+  });
+
   it("completed games set long s-maxage Cache-Control with SWR + stale-if-error (3B Layer E + 2026-05-09 cold-start mask)", async () => {
     const id = uniqueGameId();
     mockEspnThenPython(undefined, pythonPbpResponse());
