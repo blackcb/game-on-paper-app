@@ -1,0 +1,40 @@
+# Standalone Worker that fronts python.unseen-university.org.
+#
+# Architecture B's tiered cache requires the fetch to cross a Worker
+# boundary so CF's standard cache + Smart Tiered Cache engage. When the
+# main `sports` Worker tried to host this proxy itself (Phase 3G,
+# 2026-05-11), `fetch+cf` to the same script bypassed the cache layer
+# and pooling regressed — see docs/migration-plan.md Phase 3H.
+#
+# This Worker does one job: gate on X-Worker-Secret and forward to the
+# PythonContainer DO declared in the `sports` Worker. The DO class
+# itself stays declared there (single source of truth for the
+# [[containers]] + [[migrations]] blocks); we bind to the same DO
+# namespace from this Worker via `script_name = "sports"`.
+
+name = "sports-python-proxy"
+main = "src/index.ts"
+account_id = "ebe521cb5b561683303b77d32e240ba4"
+compatibility_date = "2026-05-02"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# Cross-Worker DO binding. `script_name` is the Worker that declared
+# the class (the `sports` Worker via its [[containers]] +
+# [[migrations]] blocks). The binding name `PYTHON_CONTAINER` matches
+# what the proxy code uses; the underlying class is the same Container
+# subclass the sports Worker uses.
+[[durable_objects.bindings]]
+name = "PYTHON_CONTAINER"
+class_name = "PythonContainer"
+script_name = "sports"
+
+# Production route is attached out-of-band by the `python.unseen-university.org/*`
+# Cloudflare Route (currently pointed at the `sports` Worker; moved
+# here as part of Phase 3H cutover). Not declared here because route
+# ownership is a dashboard concern and we don't want a stray
+# `wrangler deploy --config python-proxy/wrangler.toml` to repoint
+# the route based on file state.
