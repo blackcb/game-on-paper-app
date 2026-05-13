@@ -1,16 +1,30 @@
 # Migration: Architecture A → Architecture B (tiered cache via fetch+cf)
 
-> **Historical snapshot (2026-05-10).** Captures the in-flight state
-> of the Architecture B cutover. The "droplet stays up as B's public
-> origin" decision recorded below was re-amended on 2026-05-11 by the
-> Worker-proxy swap at `python.unseen-university.org`; see
-> [migration-plan.md §3G](migration-plan.md) for the final shape.
-> The legacy `frontend/`, `redis/`, and `caddy/` paths referenced
-> here were deleted in the 2026-05-11 cleanup.
+> **Historical snapshot.** This doc records the original Architecture B
+> plan as written 2026-05-10. The final shipped shape diverges from
+> the plan in two material ways — neither was foreseeable when this
+> was drafted, both are documented in `migration-plan.md` rather than
+> back-patched here:
+>
+> - The droplet did **not** stay up as the public Python origin.
+>   It was retired 2026-05-11 and destroyed 2026-05-12.
+>   `python.unseen-university.org` now resolves to the
+>   `sports-python-proxy` Worker ([python-proxy/](../python-proxy/)),
+>   which forwards to the `PythonContainer` DO in the `sports` Worker.
+>   See [migration-plan.md §3H](migration-plan.md) for the final shape
+>   (and §3G for the same-Worker-self-fetch regression that forced
+>   splitting the proxy into its own Worker).
+> - The legacy `frontend/`, `redis/`, and `caddy/` directories were
+>   deleted in the 2026-05-11 cleanup; the GitHub Actions e2e workflow
+>   went with them.
+>
+> Everything below this banner is the original plan, preserved as the
+> record of how we got here. Read it for context, not for current
+> truth.
 
-Status: **in flight, 2026-05-10**.
+Status: **superseded by [migration-plan.md §3H](migration-plan.md) on 2026-05-13**.
 See [`worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md`](../worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md)
-for the load-test data that justifies this migration.
+for the load-test data that justified this migration.
 
 ## Goal
 
@@ -160,26 +174,36 @@ flip `PYTHON_FETCH_MODE` to a non-`tiered` value.
 **Rollback:** flip `PYTHON_FETCH_MODE` back to `"service"` in
 `wrangler.toml`, `wrangler deploy`. Takes ~30 s.
 
-### Phase 4: Documentation
+### Phase 4: Documentation — DONE
 
-- `CLAUDE.md`: update the per-game cache section to describe the
-  new hybrid architecture.
-- `docs/migration-plan.md`: add a Phase 3F (or similar) section
-  documenting the tiered cache cutover.
-- `docs/replica-deploy-plan.md`: amend Phase 3E to note the droplet
-  stays up post-decommission for the Python public URL only;
-  `frontend/`, `redis/`, `caddy/` can still be removed.
+Folded into `docs/migration-plan.md` rather than re-documented here:
+- `CLAUDE.md` per-game-cache section was updated as part of the
+  2026-05-11 cleanup commit + the 3H cutover.
+- `docs/migration-plan.md` §3F/§3G/§3H document the cutover, the
+  same-Worker-self-fetch regression, and the proxy-split fix.
+- `docs/replica-deploy-plan.md` is preserved as historical record
+  and not amended — the droplet was destroyed instead of left up.
 
 ### Phase 5 (deferred): clean up dead code
 
-After 1 week of stable production on tiered:
+Trigger: 1 week of stable production on the post-3H proxy
+(unblocks ~2026-05-20 if no `python_failure` events appear in
+`wrangler tail` between now and then).
+
 - Remove the `service` branch from `fetchAndShapePBP`.
 - Remove the `containerFetch` path from `lib/backends.ts`.
-- Remove the Container's `[[durable_objects.bindings]]` block —
-  Container goes idle.
-- Eventually `wrangler containers delete` to drop the Container
-  entirely. (Saves on stored image space; no compute cost when
-  idle.)
+- Note: the Container's `[[durable_objects.bindings]]` block on
+  the `sports` Worker can **not** be removed — `sports-python-proxy`
+  binds to that same `PythonContainer` DO class via
+  `script_name = "sports"`, so the class declaration is now
+  load-bearing for the proxy, not just the legacy fallback.
+- `wrangler containers delete` is similarly off the table: the
+  Container is now the live origin behind the proxy, not a
+  rollback target.
+
+What this phase actually unblocks post-3H is narrower than
+originally scoped: just the `service`-mode dispatch code. The
+Container infrastructure itself stays.
 
 This phase is **not** part of the autonomous migration. User
 review before any of these destructive cleanups.
