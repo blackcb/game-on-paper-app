@@ -24,22 +24,31 @@ Cloudflare Workers + Containers.
 - KV namespaces: `LEAGUE_DATA` (league/team summaries) and
   `SUMMARY_LAST_UPDATED` (small isolated namespace for
   list-stable lookups).
-- Per-game PBP cache: **two layers** (post-2026-05-10 migration to
-  Architecture B):
+- Per-game PBP cache: **two layers** (Architecture B):
   1. `caches.default` keyed by request URL — wraps the rendered HTML
      for warm-path same-PoP HITs (~30 ms).
   2. CF standard cache + Smart Tiered Cache on a `fetch+cf` to
      `python.unseen-university.org/cfb/process?gameId=X` — pools the
      JSON across PoPs so cross-PoP cold-fills hit the upper-tier hub
-     instead of the Container.
+     instead of the Container. That hostname is fronted by the
+     **`sports-python-proxy` Worker** ([python-proxy/](python-proxy/)),
+     which is a separate Worker that service-binds (cross-Worker)
+     to the `PythonContainer` DO declared in the `sports` Worker.
+     The split exists because same-Worker `fetch+cf` to a hostname
+     routed back to itself bypasses CF cache (Phase 3G regression);
+     having the proxy on a different Worker lets the cache layer
+     engage. See Phase 3H in [docs/migration-plan.md](docs/migration-plan.md).
   Cache-Control varies by branch (completed games 1y, in-progress 30s
   + `stale-while-revalidate=60`, pregame 5min, quarantine 1d; errors
   not cached). The inner JSON cache uses 30s TTL on 200s, 1s on 404s,
   0 on 5xx (`cacheTtlByStatus` in lib/games.ts).
 - Worker dispatch between the old service-binding path and the new
   fetch+cf path is gated by `PYTHON_FETCH_MODE` env var
-  (`"service" | "tiered"`). Production is on `"tiered"` since
-  2026-05-10; rollback is one wrangler.toml line.
+  (`"service" | "tiered"`). Production is on `"tiered"` since the
+  Phase 3H re-cutover on 2026-05-13. Rollback is one wrangler.toml
+  line (sports Worker's service-binding path is untouched and falls
+  back to the local `PythonContainer` DO regardless of what's
+  serving `python.unseen-university.org`).
   See [docs/migrate-to-tiered-cache.md](docs/migrate-to-tiered-cache.md)
   and the load-test report at
   [worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md](worker/scripts/loadtest/analysis/2026-05-10-final/REPORT.md).
@@ -47,12 +56,13 @@ Cloudflare Workers + Containers.
 Deploy: `cd worker && wrangler deploy`. Production hostname is
 `sports.unseen-university.org` (Cloudflare Workers route).
 
-> **Droplet retired 2026-05-11**: `python.unseen-university.org` now
-> resolves to a Worker route on the `sports` Worker that service-binds
-> to the `PythonContainer`. The legacy `frontend/`, `redis/`, `caddy/`,
-> `docker-compose*.yml`, and `.github/workflows/e2e.yml` were deleted
-> in the same pass. Once you've powered off the DigitalOcean droplet
-> via the DO dashboard, that infra is fully retired. See
+> **Droplet retired 2026-05-11, destroyed 2026-05-12**. The legacy
+> `frontend/`, `redis/`, `caddy/`, `docker-compose*.yml`, and
+> `.github/workflows/e2e.yml` were deleted in the cleanup PR;
+> the DigitalOcean droplet at `137.184.138.84` was powered off and
+> destroyed. `python.unseen-university.org` resolves to the
+> `sports-python-proxy` Worker (post-3H), which forwards to the
+> `PythonContainer` DO. See
 > [docs/migrate-to-tiered-cache.md](docs/migrate-to-tiered-cache.md).
 
 ## Active work

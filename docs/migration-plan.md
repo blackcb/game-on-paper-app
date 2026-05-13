@@ -3197,6 +3197,64 @@ service binding → Container → Python. Droplet no longer in the path.
 
 The droplet power-off remains a USER ACTION pending in Phase 3E above.
 
+#### 3H — Architecture B re-cutover via dedicated python-proxy Worker (DONE 2026-05-13)
+
+Followup to 3G. The 3G design put the `python.unseen-university.org`
+proxy as a middleware on the same `sports` Worker that issued the
+`fetch+cf` for Architecture B. Same-Worker self-fetch bypasses CF's
+cache layer (`cf:{}` options are silently ignored to avoid loops),
+so cross-PoP cache pooling — Architecture B's whole point — was
+broken from 3G onward. The 2026-05-12 incident (commits 5568c7c6 →
+15065e06 → adbabbcd) rolled `PYTHON_FETCH_MODE` back to `"service"`
+while the architecture got reworked.
+
+The fix: split the proxy into a **separate Worker**
+(`sports-python-proxy`, [python-proxy/](../python-proxy/)). The
+sports Worker's `fetch+cf` to `python.unseen-university.org` then
+crosses a Worker boundary and CF cache engages as designed. The
+`PythonContainer` DO class stays declared in the `sports` Worker —
+single source of truth for `[[containers]]` + `[[migrations]]` —
+and the proxy binds to the same namespace via
+`script_name = "sports"` (cross-Worker DO binding).
+
+What shipped:
+
+- New Worker workspace at `python-proxy/`. One file of code
+  (`src/index.ts`), one auth-gate test file
+  (`test/proxy.test.ts`), two wrangler configs (the test config
+  omits the cross-Worker binding because the vitest pool can't
+  resolve `script_name = "sports"` when only this Worker is loaded).
+- The `python.unseen-university.org` Custom Domain was moved from
+  `sports` to `sports-python-proxy` via dashboard (Workers Routes
+  at the zone level was empty — the binding had always been a
+  Custom Domain, not a Workers Route, despite what 3G's notes said).
+- The host-gated middleware in `worker/src/index.tsx`
+  (Phase 3G's 152-228 block) was deleted, along with the
+  now-unused `getContainer` import and
+  `worker/test/python-proxy.test.ts` (relocated to the new
+  workspace).
+- `PYTHON_FETCH_MODE = "tiered"` flipped back on across all three
+  season configs (`worker/wrangler.toml`, `wrangler.peak.toml`,
+  `wrangler.offseason.toml`). Peak + offseason were missing the
+  var entirely; added explicitly so a season-mode swap can't
+  accidentally degrade to the service-binding path.
+
+Production smoke after the swap:
+
+- `python.unseen-university.org` returns 401 without
+  `X-Worker-Secret` (auth gate firing on the new Worker).
+- `https://sports.unseen-university.org/cfb/game/:id` returns
+  `x-upstream-cache: MISS` on first hit, `HIT` within 30 s
+  (the inner JSON cache is engaging — the part 3G broke).
+- Cross-PoP probe from a second region shows `x-upstream-cache:
+  HIT` if another PoP populated the upper tier first.
+
+Rollback: flip `PYTHON_FETCH_MODE = "service"` in `worker/wrangler.toml`
+and redeploy. The sports Worker's service-binding to `PythonContainer`
+is untouched and falls back to the local DO regardless of what's
+serving `python.unseen-university.org`. The proxy Worker can be left
+deployed in either state; it's inert without the tiered-mode flip.
+
 ### Acceptance
 
 - Production traffic served entirely by Worker + Containers; no droplet
