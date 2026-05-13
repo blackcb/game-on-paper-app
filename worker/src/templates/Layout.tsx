@@ -23,6 +23,13 @@ interface LayoutProps {
   // "Game on Paper" sections plus duplicate `id="game-id-form"` /
   // `id="inputGameId"` elements (invalid HTML).
   hideHeader?: boolean;
+  // Skip the site-wide bootstrap.bundle.min.js (~80 kB) and
+  // luxon.min.js (~70 kB) at the end of the body. Bootstrap JS only
+  // powers the nav-header dropdowns; luxon only powers
+  // `date-replace.js`'s client-side ISO → locale formatting. Pages
+  // that don't render the nav-header and format their dates
+  // server-side (or via native `Intl.DateTimeFormat`) can opt out.
+  minimalScripts?: boolean;
   children?: Child;
 }
 
@@ -35,6 +42,7 @@ export const Layout: FC<LayoutProps> = ({
   extraHead,
   extraScripts,
   hideHeader,
+  minimalScripts,
   children,
 }) => {
   return (
@@ -159,8 +167,12 @@ export const Layout: FC<LayoutProps> = ({
           </p>
         </footer>
 
-        <script src="/assets/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
-        <script src="/assets/js/luxon.min.js"></script>
+        {!minimalScripts && (
+          <>
+            <script src="/assets/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
+            <script src="/assets/js/luxon.min.js"></script>
+          </>
+        )}
         {extraScripts}
       </body>
     </html>

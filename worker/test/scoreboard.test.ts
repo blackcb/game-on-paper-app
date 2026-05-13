@@ -201,6 +201,24 @@ describe("/cfb/ scoreboard route", () => {
     expect(body).toContain(">ALA<");
   });
 
+  it("skips luxon.min.js, bootstrap.bundle.min.js, and date-replace.js (no-deps page)", async () => {
+    // Scoreboard renders no nav-header dropdowns (no Bootstrap JS
+    // needed) and formats dates via an inline native
+    // Intl.DateTimeFormat formatter (no Luxon needed). Guards
+    // against re-introducing the ~150 kB of unused library JS.
+    // Match on the actual <script src="..."> reference, not bare
+    // substring — the inline formatter's comment legitimately
+    // mentions the old filenames.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      jsonResponse({ events: [sampleGame()] }),
+    );
+    const res = await SELF.fetch("http://localhost/cfb/");
+    const body = await res.text();
+    expect(body).not.toMatch(/<script[^>]+luxon\.min\.js/);
+    expect(body).not.toMatch(/<script[^>]+bootstrap\.bundle\.min\.js/);
+    expect(body).not.toMatch(/<script[^>]+date-replace\.js/);
+  });
+
   it("omits the site-wide nav-header (matches upstream gameonpaper.com)", async () => {
     // The legacy `frontend/views/pages/cfb/index.ejs` deliberately did
     // not include `nav-header.ejs`; the live upstream still ships that

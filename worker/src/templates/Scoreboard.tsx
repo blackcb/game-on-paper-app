@@ -72,7 +72,28 @@ export const ScoreboardPage: FC<Props> = ({
     <>
       <link href="/assets/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous" />
       <link href="/assets/css/index.css" rel="stylesheet" />
-      <link href="/assets/css/dark-index.css" rel="stylesheet" />
+      {/*
+        dark-index.css is 81 kB of DarkReader auto-generated dark-mode
+        overrides — see the ASCII-art header at the top of the file.
+        Its entire content is already wrapped in `@media (prefers-
+        color-scheme: dark) { ... }`, so the rules never match for
+        light-mode users. But without an outer `media` attribute the
+        browser still treats the <link> as render-blocking and waits
+        for the download. `media="(prefers-color-scheme: dark)"`
+        lets light-mode users — likely the majority — skip the block:
+        the file is still fetched but at a lower priority and doesn't
+        gate first paint. Dark-mode users are unaffected.
+
+        Long-term TODO: rewrite this file by hand. The DarkReader
+        export contains thousands of noise rules (grid-gutter re-
+        declarations, `border-color: initial` resets); the actual
+        color-relevant rules are maybe ~200 lines.
+      */}
+      <link
+        href="/assets/css/dark-index.css"
+        rel="stylesheet"
+        media="(prefers-color-scheme: dark)"
+      />
       <style dangerouslySetInnerHTML={{ __html: darkLogoCss }} />
     </>
   );
@@ -84,7 +105,34 @@ export const ScoreboardPage: FC<Props> = ({
 
   const extraScripts = (
     <>
-      <script src="/assets/js/date-replace.js"></script>
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `
+            // Inline replacement for /assets/js/date-replace.js +
+            // luxon.min.js (~70 kB) — same behavior with native
+            // Intl.DateTimeFormat. STATUS_FINAL games get a date-only
+            // render; everything else (STATUS_SCHEDULED with a future
+            // kickoff) gets date + time. Browser locale + timezone
+            // are honored just like Luxon's toLocaleString.
+            (function() {
+              var ctxs = document.getElementsByClassName("game-context");
+              for (var i = 0; i < ctxs.length; i++) {
+                var ctx = ctxs[i];
+                var dateSpan = ctx.querySelector(".game-date");
+                if (!dateSpan) continue;
+                var d = new Date(dateSpan.textContent.trim());
+                if (isNaN(d.getTime())) continue;
+                var statusSpan = ctx.querySelector(".game-status");
+                var statusText = statusSpan ? statusSpan.textContent.trim() : "";
+                var isFinal = statusText.indexOf("FINAL") >= 0 || statusText.charAt(0) === "F";
+                dateSpan.textContent = isFinal
+                  ? d.toLocaleDateString([], { dateStyle: "short" })
+                  : d.toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+              }
+            })();
+          `,
+        }}
+      ></script>
       <script
         dangerouslySetInnerHTML={{
           __html: `
@@ -156,9 +204,14 @@ export const ScoreboardPage: FC<Props> = ({
               window.location = baseUrl;
             });
 
-            var hasActiveGames = ${hasActiveGames ? "true" : "false"};
-            if (hasActiveGames) {
-              setTimeout("location.reload(true);", 60 * 1000);
+            // Function-form setTimeout + bare location.reload().
+            // The string form was eval'd (CSP-unfriendly) and
+            // reload(true) takes a deprecated argument. Bigger lift
+            // (fetch JSON, diff, patch the DOM without losing scroll
+            // position) is queued for football season (Aug 20+),
+            // when we can validate against live games.
+            if (${hasActiveGames ? "true" : "false"}) {
+              setTimeout(function() { location.reload(); }, 60 * 1000);
             }
           `,
         }}
@@ -188,6 +241,7 @@ export const ScoreboardPage: FC<Props> = ({
       extraHead={extraHead}
       extraScripts={extraScripts}
       hideHeader={true}
+      minimalScripts={true}
     >
       <div class="container">
         <div class="row text-center mb-3">

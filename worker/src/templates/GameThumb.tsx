@@ -135,7 +135,11 @@ export const GameThumb: FC<GameThumbProps> = ({ game }) => {
         <div class="d-flex me-auto">
           <img
             class={`float-start align-self-center me-2 team-logo-${competitor.id}`}
-            height="30px"
+            width="30"
+            height="30"
+            loading="lazy"
+            decoding="async"
+            alt={cleanAbbreviation(team)}
             src={`https://a.espncdn.com/i/teamlogos/ncaa/500/${competitor.id}.png`}
           />
           <div class="d-flex flex-column me-3 align-self-center">
@@ -231,7 +235,10 @@ export const GameThumb: FC<GameThumbProps> = ({ game }) => {
             <a href="https://twitter.com/sickoscommittee">
               <img
                 class="rotate"
-                height="25px"
+                width="25"
+                height="25"
+                loading="lazy"
+                decoding="async"
                 src="/assets/img/sickos.png"
                 alt="Nominated as 'Sickos Game of the Week' by SickosCommittee."
                 title="Nominated as 'Sickos Game of the Week' by SickosCommittee."
