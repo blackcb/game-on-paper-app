@@ -114,7 +114,14 @@ export const ScoreboardPage: FC<Props> = ({
             // render; everything else (STATUS_SCHEDULED with a future
             // kickoff) gets date + time. Browser locale + timezone
             // are honored just like Luxon's toLocaleString.
+            //
+            // Don't use dateStyle:"short" — it emits a 2-digit year
+            // in en-US ("8/29/26"), whereas Luxon's DATE_SHORT /
+            // DATETIME_SHORT presets emit 4-digit ("8/29/2026").
+            // Explicit per-field opts preserve upstream's format.
             (function() {
+              var dateOpts = { year: "numeric", month: "numeric", day: "numeric" };
+              var dateTimeOpts = { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" };
               var ctxs = document.getElementsByClassName("game-context");
               for (var i = 0; i < ctxs.length; i++) {
                 var ctx = ctxs[i];
@@ -126,8 +133,8 @@ export const ScoreboardPage: FC<Props> = ({
                 var statusText = statusSpan ? statusSpan.textContent.trim() : "";
                 var isFinal = statusText.indexOf("FINAL") >= 0 || statusText.charAt(0) === "F";
                 dateSpan.textContent = isFinal
-                  ? d.toLocaleDateString([], { dateStyle: "short" })
-                  : d.toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+                  ? d.toLocaleDateString([], dateOpts)
+                  : d.toLocaleString([], dateTimeOpts);
               }
             })();
           `,
