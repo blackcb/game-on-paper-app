@@ -1,0 +1,15 @@
+# Vitest-pool-workers config. Same shape as wrangler.toml minus the
+# cross-Worker DO binding — the test pool runs this Worker in isolation
+# and can't resolve `script_name = "sports"`. The auth-gate tests
+# short-circuit before they'd touch env.PYTHON_CONTAINER, so omitting
+# the binding doesn't reduce coverage.
+#
+# Container forward behavior is covered by post-deploy production smoke
+# (see docs/migration-plan.md Phase 3H verification step), not in the
+# pool.
+
+name = "sports-python-proxy"
+main = "src/index.ts"
+account_id = "ebe521cb5b561683303b77d32e240ba4"
+compatibility_date = "2026-05-02"
+compatibility_flags = ["nodejs_compat"]
