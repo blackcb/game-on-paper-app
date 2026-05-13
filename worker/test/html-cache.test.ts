@@ -107,7 +107,7 @@ describe("/cfb/game/:gameId KV-backed HTML cache", () => {
     const id = uniqueGameId();
     // Pre-seed KV with a known body.
     const SEEDED_HTML = "<html><body>SEEDED_FROM_KV</body></html>";
-    await env.LEAGUE_DATA.put(`game-html:v1:${id}`, SEEDED_HTML);
+    await env.LEAGUE_DATA.put(`game-html:v2:${id}`, SEEDED_HTML);
 
     let pythonHits = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -161,7 +161,7 @@ describe("/cfb/game/:gameId KV-backed HTML cache", () => {
     // pool resolves these synchronously enough that one await is
     // sufficient.
     await new Promise((r) => setTimeout(r, 50));
-    const stored = await env.LEAGUE_DATA.get(`game-html:v1:${id}`);
+    const stored = await env.LEAGUE_DATA.get(`game-html:v2:${id}`);
     expect(stored).not.toBeNull();
     expect(stored).toContain("Carson Beck");
   });
@@ -210,7 +210,7 @@ describe("/cfb/game/:gameId KV-backed HTML cache", () => {
     expect(res.headers.get("x-html-cache")).toBeNull();
     // KV was never written.
     await new Promise((r) => setTimeout(r, 50));
-    const stored = await env.LEAGUE_DATA.get(`game-html:v1:${id}`);
+    const stored = await env.LEAGUE_DATA.get(`game-html:v2:${id}`);
     expect(stored).toBeNull();
   });
 });

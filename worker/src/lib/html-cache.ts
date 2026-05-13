@@ -27,7 +27,12 @@
 // 1-year `expirationTtl`. Acceptable storage overhead for a 1-year
 // TTL on a small site.
 
-const HTML_CACHE_VERSION = "v1";
+// v2 (2026-05-13): game template now passes hideHeader={true} so
+// the rendered HTML no longer includes the site-wide nav-header.
+// v1 entries still in KV would serve the duplicate-header version
+// until they age out via the 1y TTL; bumping the prefix takes them
+// out of the read path immediately. Old keys auto-delete.
+const HTML_CACHE_VERSION = "v2";
 const HTML_CACHE_TTL_SECONDS = 31_536_000; // 365 days; matches CACHE_CONTROL.completed s-maxage
 
 function keyFor(gameId: string | number): string {
