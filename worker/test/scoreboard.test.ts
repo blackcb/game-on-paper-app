@@ -22,6 +22,17 @@ async function clearScoreboardKv() {
   await env.LEAGUE_DATA.delete("cfb-scoreboard-80");
 }
 
+// Caches.default is shared across the test file (workers-runtime
+// mock). The renderScoreboard route now caches rendered HTML keyed
+// by request URL, so a prior test's populated render bleeds into
+// the next test's empty-state assertion unless we clear matching
+// keys here.
+async function clearScoreboardCache(...urls: string[]) {
+  for (const url of urls) {
+    await caches.default.delete(new Request(url, { method: "GET" }));
+  }
+}
+
 const jsonResponse = (body: unknown, init: ResponseInit = {}) =>
   new Response(JSON.stringify(body), {
     headers: { "content-type": "application/json" },
@@ -164,6 +175,11 @@ describe("schedule lib", () => {
 describe("/cfb/ scoreboard route", () => {
   beforeEach(async () => {
     await clearScoreboardKv();
+    await clearScoreboardCache(
+      "http://localhost/cfb/",
+      "http://localhost/cfb/?group=8",
+      "http://localhost/cfb/?group=-1",
+    );
   });
 
   it("renders the scoreboard with chrome, dropdowns, and game cards", async () => {
@@ -200,6 +216,76 @@ describe("/cfb/ scoreboard route", () => {
     expect(body).not.toContain("blog-header-logo");
     expect(body.match(/id="game-id-form"/g)?.length ?? 0).toBe(1);
     expect(body.match(/id="inputGameId"/g)?.length ?? 0).toBe(1);
+  });
+
+  it("caches rendered HTML in caches.default and serves repeats with x-worker-cache=HIT", async () => {
+    // The bare /cfb/ route is the main landing page; before this
+    // wrap it re-rendered JSX on every request. Confirms (1) the
+    // first hit produces a Cache-Control header consistent with
+    // the data shape (no active games → pregame TTL), (2) the
+    // second hit serves from caches.default with the HIT signal,
+    // (3) only one upstream KV/ESPN call happens across both hits.
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => jsonResponse({ events: [sampleGame()] }));
+    const url = "http://localhost/cfb/";
+    const r1 = await SELF.fetch(url);
+    expect(r1.status).toBe(200);
+    expect(r1.headers.get("x-worker-cache")).toBe(null);
+    expect(r1.headers.get("cache-control")).toContain("max-age=300");
+    // Drain so cache.put resolves before the second fetch
+    // (see loadtest-branch.test.ts:200 for the same pattern).
+    await r1.text();
+    const r2 = await SELF.fetch(url);
+    expect(r2.status).toBe(200);
+    expect(r2.headers.get("x-worker-cache")).toBe("HIT");
+    // ESPN was only consulted once across both hits.
+    const espnCalls = fetchSpy.mock.calls.filter(([input]) => {
+      const u = typeof input === "string" ? input : (input as Request).url;
+      return u.includes("scoreboard") || u.includes("schedule");
+    });
+    expect(espnCalls.length).toBe(1);
+  });
+
+  it("uses the in-progress (30s + SWR 60) TTL when the scoreboard has active games", async () => {
+    // The page reloads itself every 60 s during active games; a
+    // 30 s TTL + 60 s SWR keeps most repeats in the instant-serve
+    // SWR window without ever serving wildly-stale lines.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      jsonResponse({
+        events: [
+          sampleGame({
+            status: { type: { name: "STATUS_IN_PROGRESS", completed: false, detail: "Q2" }, period: 2 },
+          }),
+        ],
+      }),
+    );
+    const res = await SELF.fetch("http://localhost/cfb/");
+    expect(res.headers.get("cache-control")).toContain("max-age=30");
+    expect(res.headers.get("cache-control")).toContain("stale-while-revalidate=60");
+  });
+
+  it("does NOT cache the empty 'No games scheduled.' render", async () => {
+    // A transient ESPN/KV hiccup that renders empty must not lock
+    // the user into that state for the TTL. errorNoStore on the
+    // header + skip cache.put — confirmed by issuing a second
+    // request with a populated mock and seeing real games render.
+    //
+    // Use ?group=8 to bypass `getCachedCurrentScoreboard`'s KV
+    // write-through (which would persist the empty result across
+    // both fetches via KV, not the HTML cache we're testing).
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fetchSpy.mockImplementationOnce(async () => jsonResponse({ events: [] }));
+    fetchSpy.mockImplementation(async () => jsonResponse({ events: [sampleGame()] }));
+    const url = "http://localhost/cfb/?group=8";
+    const r1 = await SELF.fetch(url);
+    expect(r1.headers.get("cache-control")).toContain("no-store");
+    expect(await r1.text()).toContain("No games scheduled.");
+    const r2 = await SELF.fetch(url);
+    // Second request hits the populated mock — proves the empty
+    // render was NOT written to caches.default.
+    expect(r2.headers.get("x-worker-cache")).toBe(null);
+    expect(await r2.text()).toContain(">uga</strong>");
   });
 
   it("shows 'No games scheduled' when ESPN returns an empty event list", async () => {
@@ -338,6 +424,13 @@ describe("sub-phase 2F: cron-warmed scoreboard helpers", () => {
 });
 
 describe("/cfb/year/:year/type/:type/week/:week", () => {
+  beforeEach(async () => {
+    await clearScoreboardCache(
+      "http://localhost/cfb/year/2024/type/2/week/2",
+      "http://localhost/cfb/year/2016/type/2/week/6",
+    );
+  });
+
   it("hits cdn.espn.com schedule with the year/type/week params and renders", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       // Historical ESPN payload shape: content.schedule keyed by date.
@@ -405,6 +498,10 @@ describe("/cfb/year/:year/type/:type/week/:week", () => {
 });
 
 describe("/cfb/year/:year", () => {
+  beforeEach(async () => {
+    await clearScoreboardCache("http://localhost/cfb/year/2024");
+  });
+
   it("renders the year scoreboard defaulting to type=2 week=1", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       return new Response(

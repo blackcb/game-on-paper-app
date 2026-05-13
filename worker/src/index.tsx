@@ -168,6 +168,31 @@ async function renderScoreboard(
     title: string | null;
   },
 ) {
+  // Per-PoP HTML cache, same shape as /cfb/game/:gameId. Before this
+  // wrap landed, the bare /cfb/ route was the only major page that
+  // re-rendered JSX on every request despite having KV-cached
+  // upstream data — warm TTFB was ~render-cost across the board.
+  // With caches.default in front, same-PoP repeats land in ~30 ms.
+  //
+  // TTL strategy: `inProgress` (30 s + SWR 60) when the page shows
+  // live games — matches the page's own 60 s auto-reload cadence,
+  // so most repeats fall in the SWR window. `pregame` (5 min)
+  // otherwise. Empty scoreboards do NOT cache (errorNoStore) — a
+  // transient ESPN/KV hiccup that renders "No games scheduled."
+  // shouldn't lock the page into that state for the TTL window.
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cached = await cache.match(cacheKey);
+  if (cached != null) {
+    const headers = new Headers(cached.headers);
+    headers.set("x-worker-cache", "HIT");
+    return new Response(cached.body, {
+      status: cached.status,
+      statusText: cached.statusText,
+      headers,
+    });
+  }
+
   const groupParam = c.req.query("group");
   const group = groupParam ?? 80;
   const isDefaultCurrent =
@@ -215,36 +240,47 @@ async function renderScoreboard(
     // scheduled." path.
   }
   const scoreboard = prepareGameList(games);
+  const active = hasActiveGames(scoreboard);
+  const empty = scoreboard.length === 0;
 
   // Opportunistic Python container warm (2026-05-09 cold-start mask).
   // A user landing on the scoreboard is statistically about to click
   // into a game page — fire-and-forget a warmup ping so the Python
   // container is being resumed during the user's reading time. Gated
   // on CRON_WARM_ENABLED so the same kill-switch that disables Layer
-  // B also disables this. `hasActiveGames` filters the case where the
-  // user is browsing a quiet historical week — no click-through worth
-  // warming for.
-  if (
-    c.env.CRON_WARM_ENABLED === "1" &&
-    c.env.PYTHON_CONTAINER &&
-    hasActiveGames(scoreboard)
-  ) {
+  // B also disables this. The active-games gate filters the case
+  // where the user is browsing a quiet historical week — no
+  // click-through worth warming for.
+  if (c.env.CRON_WARM_ENABLED === "1" && c.env.PYTHON_CONTAINER && active) {
     c.executionCtx.waitUntil(pingContainer(c.env.PYTHON_CONTAINER, "python"));
   }
 
-  return c.html(
-    <ScoreboardPage
-      scoreboard={scoreboard}
-      weekList={getWeeksMap()}
-      groups={getGroups()}
-      year={opts.year}
-      week={opts.week}
-      seasontype={opts.seasontype}
-      group={group}
-      title={opts.title}
-      hasActiveGames={hasActiveGames(scoreboard)}
-    />,
+  const html = await time(c, "render", async () =>
+    (
+      <ScoreboardPage
+        scoreboard={scoreboard}
+        weekList={getWeeksMap()}
+        groups={getGroups()}
+        year={opts.year}
+        week={opts.week}
+        seasontype={opts.seasontype}
+        group={group}
+        title={opts.title}
+        hasActiveGames={active}
+      />
+    ).toString(),
   );
+
+  const cacheControl = empty
+    ? CACHE_CONTROL.errorNoStore
+    : active
+      ? CACHE_CONTROL.inProgress
+      : CACHE_CONTROL.pregame;
+  const response = cachedHtml(html, cacheControl);
+  if (!empty) {
+    c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  }
+  return response;
 }
 
 app.get("/cfb/", (c) =>
