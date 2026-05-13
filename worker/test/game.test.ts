@@ -278,6 +278,19 @@ describe("/cfb/game/:gameId route (Cache API era)", () => {
     expect(body).toContain("var gameData =");
   });
 
+  it("omits the site-wide nav-header (matches upstream gameonpaper.com)", async () => {
+    // Same reasoning as the scoreboard test: legacy EJS game page
+    // (`frontend/views/pages/cfb/game.ejs`) didn't include
+    // `nav-header.ejs`; upstream still ships that way. The game
+    // page's own `blog-header` (back arrow + title) is the only
+    // header upstream emits.
+    const id = uniqueGameId();
+    mockEspnThenPython(undefined, pythonPbpResponse());
+    const res = await SELF.fetch(`https://example.com/cfb/game/${id}`);
+    const body = await res.text();
+    expect(body).not.toContain("blog-header-logo");
+  });
+
   it("back-arrow button does history.back() if there's a referrer, else / fallback", async () => {
     // Inline progressive-enhancement on the bi-arrow-left button:
     // keep `href="/"` for no-JS / direct hits, but onclick falls

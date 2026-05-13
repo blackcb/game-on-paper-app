@@ -585,7 +585,7 @@ img.team-logo-61 { content: url('/assets/img/ennui-uga.png'); }`;
   const homeBreakdown = matchupTeam[1] ?? {};
 
   return (
-    <Layout title={title} subtitle={subtitle} canonical={canonical} extraHead={extraHead} extraScripts={extraScripts}>
+    <Layout title={title} subtitle={subtitle} canonical={canonical} extraHead={extraHead} extraScripts={extraScripts} hideHeader={true}>
       <div class="container-fluid">
         <header class="blog-header py-3 mb-3">
           <div class="row flex-nowrap justify-content-between align-items-center">

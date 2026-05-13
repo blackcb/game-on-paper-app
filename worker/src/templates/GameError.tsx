@@ -115,6 +115,7 @@ export const GameErrorPage: FC<Props> = ({ gameInfo, errorType }) => {
       canonical={canonical}
       extraHead={extraHead}
       extraScripts={extraScripts}
+      hideHeader={true}
     >
       <div class="container-fluid">
         <header class="blog-header py-3 mb-3">

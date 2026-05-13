@@ -1404,7 +1404,7 @@ if (gameData.gameInfo.status.type.completed == true || statusDescription.include
   );
 
   return (
-    <Layout title={title} subtitle={subtitle} canonical={canonical} extraHead={extraHead} extraScripts={extraScripts}>
+    <Layout title={title} subtitle={subtitle} canonical={canonical} extraHead={extraHead} extraScripts={extraScripts} hideHeader={true}>
       <div class="container-fluid">
         <ScoreHeader
           homeTeam={homeTeam}
