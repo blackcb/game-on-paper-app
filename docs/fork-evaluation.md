@@ -344,6 +344,19 @@ duplication.
 | Aspect              | Legacy droplet                            | Architecture B                                      |
 |---------------------|-------------------------------------------|-----------------------------------------------------|
 | Python pipeline     | `CFBPlayProcess` in Flask (dev server)    | Same Flask app under gunicorn (`-w 2 -k gthread --threads 8 --preload`), in a Cloudflare Container |
+
+> **A note on Flask vs. gunicorn**: Flask is unchanged on the
+> Cloudflare side. The Flask app object (`app = Flask(__name__)`
+> in `python/app.py`) still defines every route, parses every
+> request, and shapes every response. What changed is the WSGI
+> server in front of it: upstream ran the bundled
+> `werkzeug.serving.run_simple` dev server (single-threaded,
+> explicitly not for production) via `python app.py`; the
+> Cloudflare Container runs gunicorn loading the same `app:app`
+> object. The Phase 1 commit message ("replaced Flask's dev
+> server with gunicorn") sometimes gets shortened to "swapped
+> Flask for gunicorn" in conversation, but Flask the framework
+> is still the load-bearing dependency.
 | SSR                 | EJS templates in Express                  | Hono JSX in a Cloudflare Worker                     |
 | JSON caching        | Redis instance 2 + Express middleware     | CF standard + Smart Tiered Cache via `fetch+cf`     |
 | HTML caching        | Caddy reverse-proxy headers               | `caches.default` (per-PoP) + KV (global, completed games) |
@@ -616,7 +629,115 @@ backlog-traffic case — completed games served from KV in the low
 hundreds of milliseconds, regardless of which PoP serves the
 request.
 
-### 3.8 What this doesn't measure
+### 3.8 Concurrency capacity and the stale-refresh defense
+
+The legacy droplet's concurrency ceiling was set by the Flask dev
+server (one in-flight request at a time, see §1.1). Phase 1's
+gunicorn swap raised that to 16 concurrent requests per Python
+process (`-w 2 --threads 8`). The Cloudflare Container inherits
+that per-instance ceiling but composes it with several layers of
+upstream collapsing, so the system's effective concurrency is
+much higher than the structural limit suggests.
+
+#### Structural ceiling
+
+| Component                       | Per-instance | Instances        | Total in flight |
+|---------------------------------|--------------|------------------|-----------------|
+| `sports` Worker (per PoP)       | high (CF Workers isolate model) | per PoP × ~330 PoPs | not the bottleneck |
+| `PythonContainer` (Cloudflare)  | 2 workers × 8 threads = **16** | `max_instances = 5` (`worker/wrangler.toml:176`) | **80 concurrent Python executions** |
+| `SummaryContainer` (Cloudflare) | (Node, single process)         | `max_instances = 3` (`worker/wrangler.toml:189`) | 3 concurrent summary requests |
+| `LEAGUE_DATA` KV reads          | unconstrained per-PoP          | global               | not the bottleneck (tens of thousands/sec) |
+
+So the strict floor is "80 simultaneous `/cfb/process` executions."
+At ~3.2 s per cold execution that's a 25 RPS sustained ceiling
+**against the Python origin** if every request were a true cold
+miss. The interesting question is how often that ceiling is
+actually approached given the cache stack in front of it.
+
+#### How the cache stack collapses request load
+
+The four mechanisms that sit between user requests and the Python
+container, in the order they fire:
+
+1. **`stale-while-revalidate=60` on in-progress games**
+   ([CACHE_CONTROL.in_progress in `worker/src/lib/games.ts`](../worker/src/lib/games.ts)).
+   When the 30-second `s-maxage` expires, the next user gets the
+   stale response **immediately** while the Worker fires a single
+   background fetch to refresh the cache entry. Without SWR, the
+   moment the TTL expires every concurrent viewer of that game
+   races to re-fetch — a thundering herd that scales with
+   audience size. With SWR, the herd collapses to *one* refresh
+   per cache key per refresh window.
+2. **`caches.default` per-PoP HIT** absorbs the steady-state
+   warm path entirely. At ~50 PoPs and ~1k–10k concurrent
+   viewers per popular game, the vast majority of requests within
+   the 30s TTL window never reach the next layer.
+3. **CF Smart Tiered Cache (Layer 2)** pools any per-PoP miss to
+   a regional upper-tier hub. The 2026-05-10 load test measured
+   this directly: 5 PoPs × 28 TTL windows = 140 expected
+   per-PoP cold-fills, but only 78 actually reached origin
+   because regional pooling absorbed roughly half. At ~50
+   production PoPs the same shape predicts ~3 origin fills per
+   30 s window globally for a single popular game (see §3.6).
+4. **In-process TTL serialized-bytes cache in gunicorn**
+   (commit `572dd2e`, win #7). Even when multiple requests reach
+   the Python container concurrently for the same gameId — a
+   prewarm racing a real user, two PoPs cold-filling in the same
+   second, a retry storm — only the first one runs the pipeline.
+   The other gthreads return the cached serialized bytes in
+   sub-millisecond. This is the safety net under all the other
+   layers: even if SWR + tiered cache + per-PoP cache all miss
+   simultaneously, the container itself collapses concurrent
+   same-gameId work to one execution per 15 s.
+
+#### Effective capacity (calculated, not measured)
+
+Putting numbers on the layered defense for a popular in-progress
+game during a live window:
+
+| Audience scale (per popular game) | Origin RPS without SWR + caches | Origin RPS with the full stack |
+|-----------------------------------|--------------------------------:|-------------------------------:|
+| 1,000 concurrent viewers           | ~33 RPS (1k × refresh/30s) | **~0.1 RPS** (~3 fills/30s) |
+| 10,000 concurrent viewers          | ~333 RPS                   | **~0.1 RPS** (same — bounded by hub count, not viewer count) |
+| 50,000 concurrent viewers          | ~1,667 RPS                 | **~0.1 RPS** |
+
+The headline property is that the right-hand column is **flat in
+audience size**. Above some threshold the bottleneck stops being
+"how many users" and becomes "how many regional hubs Cloudflare
+puts in front of the origin" — roughly 3, give or take, by the
+loadtest measurement. Adding more users doesn't add more origin
+load.
+
+For multiple simultaneous popular games (a Saturday slate with
+~15 marquee games active in the same window) the math composes
+linearly: ~15 games × ~0.1 RPS = ~1.5 RPS sustained against the
+80-slot ceiling, well under 2 % utilization. The completed-games
+backlog is even lighter because Layer 3 KV intercepts before the
+request ever reaches Python.
+
+#### What's actually measured vs. calculated
+
+These numbers are **calculated** from the layered defense, not
+measured at scale. Concrete data points:
+
+- The 2026-05-10 load test ran 85 concurrent viewers (17 per
+  region × 5 regions). Origin amplification was 9.3 % for B,
+  consistent with the predicted "1 fill per regional hub per TTL
+  window" shape.
+- Local A/B for the in-process TTL cache (commit `572dd2e`)
+  confirmed sub-millisecond returns for repeats within the 15 s
+  window.
+- Production deploy-day smoke confirmed the SWR header is being
+  emitted on in-progress responses.
+
+**No game-day-scale concurrency test has been run** — the load
+test ceiling of 85 viewers is well below any of the layers'
+saturation points. The structural numbers above are upper bounds
+on what the architecture *should* support; in-season validation
+(2J in the migration plan, Aug 20+) would either confirm them or
+surface the next bottleneck.
+
+### 3.9 What this doesn't measure
 
 - **Mobile end-user latency.** TTFB measurements are server-side
   only. Browser-Reported metrics (LCP, FID, CLS) on a 4G connection
@@ -674,6 +795,19 @@ described the load-test configuration accurately. As of 2026-05-13
 the fork makes them rarer **and** faster: rarer via cross-PoP
 pooling, and faster (or eliminated entirely for the backlog case)
 via the in-process TTL cache and Layer 3 KV.
+
+A second property worth calling out explicitly is **decoupling
+audience size from origin load**. Stale-while-revalidate at the
+HTTP cache layer collapses simultaneous client refreshes into one
+background fetch per cache key per refresh window;
+the tiered cache then collapses those across PoPs to roughly one
+fill per regional hub per window; and the in-process TTL
+serialized-bytes cache in gunicorn collapses any remaining
+concurrent same-gameId work at the origin. The composite is a
+flat ~0.1 RPS ceiling against the Python container per popular
+game regardless of whether 1,000 or 50,000 users are watching
+(see §3.8). The legacy stack had no equivalent — every TTL
+expiry was a thundering herd against a single droplet.
 
 ---
 
