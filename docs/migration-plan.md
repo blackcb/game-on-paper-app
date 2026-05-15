@@ -168,19 +168,13 @@ Open follow-ups, in priority order:
    lever for "many distinct PoPs each paying a cold render in
    parallel" load shape. Becomes the natural next big push
    once Phase 2 cache-layer work is parked/done.
-3. **2I follow-up — CF support ticket** (when convenient):
-   ask CF support why `cf-cache-status` doesn't appear on
-   `/cfb/game/*` despite a correctly-configured Cache Rule
-   that lists as Active. Briefly worked 2026-05-05, stopped
-   2026-05-07. If they fix it, cross-PoP pooling becomes a
-   freebie (rule already in place). Non-blocking.
-4. **2J follow-up — football-season validation**: when
+3. **2J follow-up — football-season validation**: when
    STATUS_IN_PROGRESS games exist (Aug 20+), validate the
    SWR behavior end-to-end in Workers Logs — confirm
    `total_ms` stays under ~100 ms during a live-game window
    instead of spiking every 30 s. Vitest assertion is the
    authoritative test until then.
-5. **2H.11 — burn-in + cleanup** (parallel):
+4. **2H.11 — burn-in + cleanup** (parallel):
    - Watch CF Web Analytics + `wrangler tail` for 24-48 h.
    - After clean burn-in: `docker compose stop frontend` on the
      droplet (keeps Python + Caddy + Redis running; the Express
@@ -193,7 +187,7 @@ Open follow-ups, in priority order:
    field test for the Lighthouse mobile thresholds.
 
 Phase 4 (TS + ONNX port) stays deferred. Only worth opening
-if 2I + 2J + Phase 3 together still leave Python latency as
+if 2J + Phase 3 together still leave Python latency as
 a real complaint, which is unlikely at current traffic.
 
 Sanity before starting:
@@ -3363,11 +3357,11 @@ don't get lost. Promote to a phase when one becomes urgent.
   Cron-warm fires from a single CF region (currently ATL), so it
   only warms one PoP's cache; users hitting other PoPs see the
   cold path. Fix paths, in order of cost / blast radius:
-    1. Re-investigate Phase 2I Cache Rule. It was parked
-       2026-05-07 because `cf-cache-status` never appeared on
-       responses, but the diagnosis pre-dated the
-       `caches.default.match` revert and may have been confounded
-       by that. Worth a fresh look now.
+    1. ~~Re-investigate Phase 2I Cache Rule.~~ **Closed**: Cache
+       Rules do not engage on Workers-routed paths — that's how
+       the product works, not a bug. The Architecture B
+       `fetch+cf` path via the `sports-python-proxy` Worker is
+       the cross-PoP pooling mechanism we landed on instead.
     2. Smart Tiered Cache pricing — was confirmed 2026-05-05 not
        to engage on this account's plan. Re-check whether
        enabling on a higher tier is cheaper than the additional
