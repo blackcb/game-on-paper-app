@@ -21,9 +21,11 @@ fork:
    at `sports.unseen-university.org`.
 2. Rebuilt the frontend as a Cloudflare Worker (Phase 2), then moved
    the Python pipeline into Cloudflare Containers (Phase 3).
-3. Landed a two-layer cache topology ("Architecture B") that pools the
-   Python JSON output across PoPs via Cloudflare's Smart Tiered Cache
-   (Phase 3H, 2026-05-13).
+3. Landed a three-layer cache topology ("Architecture B" plus the
+   KV HTML layer added after the formal load test) that pools the
+   Python JSON output across PoPs via Cloudflare's Smart Tiered
+   Cache (Phase 3H, 2026-05-13) and serves completed-game HTML
+   globally out of KV (Layer 3, 2026-05-11).
 
 This document describes what was wrong, what was built, how the two
 implementations measure against each other, and what other defects
@@ -195,71 +197,120 @@ The end-state ("Architecture B", Phase 3H finalized 2026-05-13):
   `PythonContainer` DO declared in the `sports` Worker (via
   `script_name = "sports"` in the proxy's wrangler.toml). The
   proxy exists for the cache-engagement reason described in §2.4.
-- **KV namespaces**: `LEAGUE_DATA` (league/team summaries, 3-day
-  TTL), `SUMMARY_LAST_UPDATED` (small list-stable lookups).
+- **KV namespaces**: `LEAGUE_DATA` (league/team summaries +
+  rendered HTML for completed games via Layer 3, see §2.2),
+  `SUMMARY_LAST_UPDATED` (small list-stable lookups).
 
 Single user-facing hostname: `sports.unseen-university.org`.
 
 ### 2.2 Request flow
 
-**Path A — fully cold render** of `/cfb/game/:gameId`:
+The architecture has **three cache layers** in front of the Python
+pipeline, in order of cheapness:
+
+1. **`caches.default`** (Layer 1) — per-PoP, rendered HTML, ~30 ms HIT
+2. **KV (`LEAGUE_DATA`)** (Layer 3, completed games only) — globally
+   replicated, rendered HTML keyed by `game-html:v2:<gameId>`,
+   ~80–311 ms HIT
+3. **CF standard + Smart Tiered Cache** (Layer 2) — pooled across
+   PoPs, raw Python JSON keyed by request URL, ~100–200 ms HIT
+
+(The numbering reflects ship order, not request order.
+[worker/src/lib/html-cache.ts](../worker/src/lib/html-cache.ts) is
+Layer 3, added 2026-05-11 — after the load test.)
+
+**Path A — fully cold render of `/cfb/game/:gameId`:**
 
 1. Request arrives at a PoP with no cached state.
-2. `sports` Worker classifies the game (ESPN scoreboard probe).
-3. Worker calls `fetchAndShapePBPTiered(env, gameId, metadata)`
+2. `sports` Worker checks `caches.default` — MISS.
+3. Worker classifies the game (ESPN scoreboard probe).
+4. **If the game is completed**, Worker reads
+   `game-html:v2:<gameId>` from `LEAGUE_DATA` KV
+   ([worker/src/lib/html-cache.ts](../worker/src/lib/html-cache.ts)).
+   On HIT, the rendered HTML returns directly, gets stamped into
+   `caches.default` for this PoP on the way out, and the response
+   carries `x-html-cache: HIT`. Latency ~311 ms (measured at deploy
+   smoke, 2026-05-11).
+5. On KV MISS (or in-progress / pregame), Worker calls
+   `fetchAndShapePBPTiered(env, gameId, metadata)`
    ([worker/src/lib/games.ts:231](../worker/src/lib/games.ts#L231)),
    which issues `fetch('https://python.unseen-university.org/cfb/process?gameId=X', {cf: {cacheEverything: true, cacheTtlByStatus: {"200-299": 30, "404": 1, "500-599": 0}}})`.
-4. Because the fetch crosses the Worker boundary, it engages
+6. Because the fetch crosses the Worker boundary, it engages
    Cloudflare's standard cache + Smart Tiered Cache. On a fully
-   cold cache, it routes via the upper-tier hub to the
+   cold tiered cache, it routes via the upper-tier hub to the
    `sports-python-proxy` Worker.
-5. The proxy Worker validates `X-Worker-Secret`, then forwards
+7. The proxy Worker validates `X-Worker-Secret`, then forwards
    the request to the `PythonContainer` Durable Object.
-6. Flask runs the pipeline; JSON returns up the chain. The tiered
+8. Flask runs the pipeline; JSON returns up the chain. The tiered
    cache stores it (30 s TTL on 200s).
-7. The `sports` Worker reshapes the JSON, renders HTML, and stores
-   the response in `caches.default` keyed by request URL.
-8. User receives the page; response carries
-   `x-fetch-mode: tiered`, `x-upstream-cache: MISS`,
-   `Cache-Control: s-maxage=30, max-age=0, stale-while-revalidate=60`
-   (in-progress) or `s-maxage=31536000` (completed).
+9. The `sports` Worker reshapes the JSON and renders HTML.
+10. After the response, the Worker fires `waitUntil()` to write
+    the rendered HTML to KV with a 1-year `expirationTtl`
+    (completed games only). It also stores the response in
+    `caches.default` for this PoP.
+11. User receives the page with `x-fetch-mode: tiered`,
+    `x-upstream-cache: MISS`, and `Cache-Control: s-maxage=30,
+    max-age=0, stale-while-revalidate=60` (in-progress) or
+    `s-maxage=31536000` (completed).
 
 **Path B — warm HTML cache HIT** (same PoP, within HTML TTL):
-
 1. Worker handler checks `caches.default.match(cacheKey)` near the
    top of the route handler
    ([worker/src/index.tsx](../worker/src/index.tsx)).
 2. HIT — pre-rendered HTML returned directly. ~30 ms.
 
-**Path C — cold HTML at a new PoP, warm JSON in tiered cache:**
+**Path C — cold HTML at a new PoP, warm KV** (completed games, the
+common-case for backlog browsing):
+1. The per-PoP `caches.default` misses.
+2. KV read returns the previously-rendered HTML.
+3. Worker stamps the response into `caches.default` for this PoP.
+   Latency ~311 ms; subsequent requests at this PoP serve from
+   Layer 1 at ~30 ms.
 
-1. The per-PoP `caches.default` misses (different PoP, or expired).
+**Path D — cold HTML at a new PoP, warm JSON in tiered cache**
+(in-progress games during a live window):
+1. `caches.default` misses; KV is skipped (not a completed game).
 2. The `fetch+cf` call hits Cloudflare's Smart Tiered Cache.
    The upper-tier hub has the JSON from a recent request at any
    other PoP within the last 30 s.
 3. Worker reshapes and renders without re-executing Python; writes
    to `caches.default`. Latency ~100–200 ms.
 
-### 2.3 Why two cache layers
+### 2.3 Why three cache layers
 
-A single layer would not work because the two layers solve
-independent problems.
+Each layer solves a problem the others can't.
 
-`caches.default` is **per-PoP** — a HIT at JFK doesn't help a user
-hitting LAX. With ~50 production PoPs and a 30-second TTL on
-in-progress games, a single-layer design pays the full Python cold
-cost (~5 s) once per PoP per TTL window. Architecture B's tiered
-cache pools across PoPs: the upper-tier hub is shared regionally, so
-most PoP misses still hit the hub instead of re-executing Python.
-The 5-region load test measured this directly: Architecture A
-(`caches.default` only) needed 142 cold fills over 850 s; Architecture
-B needed 78 — a 45 % reduction in origin calls under the same
+**`caches.default` (Layer 1)** is per-PoP. It owns the warm path:
+~30 ms HIT serves pre-rendered HTML with effectively no Worker CPU.
+But a HIT at JFK doesn't help a user hitting LAX, and Worker deploys
+invalidate it entirely.
+
+**Smart Tiered Cache (Layer 2)** pools the raw Python JSON across
+PoPs at the upper-tier hub level. It's the lever for in-progress
+games during a live window: with a 30-second TTL on in-progress
+data and ~50 production PoPs, a single-layer design pays the full
+Python cold cost once per PoP per TTL window. The 5-region load test
+measured this directly: Architecture A (`caches.default` only)
+needed 142 cold fills over 850 s; Architecture B with the tiered
+layer needed 78 — a 45 % reduction in origin calls under the same
 synthetic load (see §3.3).
 
-The HTML layer can't be dropped either: even with a perfect JSON
-cache, re-rendering the 200–400 KB HTML page wastes Worker CPU on
-every PoP-warm hit. Keeping `caches.default` for HTML gives ~30 ms
-warm responses where the only work is `caches.default.match()`.
+**KV-backed HTML (Layer 3)** owns the cold-PoP path for **completed
+games** (the overwhelming majority of traffic outside live windows).
+KV is globally replicated, so the first user anywhere fills the
+cache for every PoP, and Worker deploys don't invalidate it.
+Without Layer 3, a cold-PoP visit to an old game would fall through
+to Layer 2 — which has a 30-second TTL — almost always miss there
+too, and pay the full Python pipeline. With Layer 3, that visit
+serves from KV at ~311 ms regardless of whether anyone else has
+ever hit that gameId from that PoP. Layer 3 is bounded to completed
+games because in-progress and pregame HTML is volatile; caching it
+globally would serve stale data.
+
+The three layers compose: warm path goes Layer 1 (~30 ms); cold-PoP
+for a completed game goes Layer 1 miss → Layer 3 hit (~311 ms);
+cold-PoP for an in-progress game goes Layer 1 miss → Layer 2 hit
+(~100–200 ms); a fully cold edge falls through to Python.
 
 ### 2.4 Why a separate proxy Worker
 
@@ -292,7 +343,7 @@ duplication.
 | Python pipeline     | `CFBPlayProcess` in Flask                 | Identical code, in a Cloudflare Container           |
 | SSR                 | EJS templates in Express                  | Hono JSX in a Cloudflare Worker                     |
 | JSON caching        | Redis instance 2 + Express middleware     | CF standard + Smart Tiered Cache via `fetch+cf`     |
-| HTML caching        | Caddy reverse-proxy headers               | `caches.default` keyed by request URL               |
+| HTML caching        | Caddy reverse-proxy headers               | `caches.default` (per-PoP) + KV (global, completed games) |
 | Static assets       | `express.static('public/')` on droplet    | Worker `[assets]` binding (edge-distributed)        |
 | Reverse proxy       | Caddy on the droplet                      | Cloudflare Custom Domain + Workers route            |
 | Compression         | Phase 1: Node `compression` + Flask-Compress | CF re-compresses with Brotli at the edge          |
@@ -418,20 +469,21 @@ embedded PBP JSON dominates parse time and didn't change. **Mobile
 Lighthouse would be a more meaningful measurement and is the natural
 follow-up** (deferred per perf-plan §208–209).
 
-### 3.6 Cold-start cost — the honest caveat
+### 3.6 Cold-start cost at the time of the load test
 
 The synthetic load test reported B's p99 TTFB at 389 ms vs. A's 783
 ms — a clean B win on paper. Off-season production validation
-revealed the catch: **synthetic replay (~30 ms server work) is ~100×
-faster than real `/cfb/process` (~5 s).** Real production cold-fills
-on both A and B paid ~5 seconds of Python time per incident:
+revealed the catch: **synthetic replay (~30 ms server work) was
+~100× faster than real `/cfb/process` (~5 s).** At the time of the
+load test, real production cold-fills on both A and B paid ~5
+seconds of Python time per incident:
 
 | Architecture | Trigger              | Observed TTFB |
 |--------------|----------------------|--------------:|
-| **B** (prod) | TTL expired (35 s)   |   4.7–6.5 s   |
-| **D** (legacy)| forced uncached      |   4.1–8.2 s  |
+| **B** (prod, pre-572dd2e) | TTL expired (35 s)  |   4.7–6.5 s   |
+| **D** (legacy)            | forced uncached     |   4.1–8.2 s   |
 
-**B's win is not per-incident latency — it is incident volume.** With
+**B's win then was incident volume, not per-incident latency.** With
 a per-PoP cache and 50 PoPs, A pays ~50 cold-fills per 30 s window
 when traffic is broadly distributed. With cross-PoP pooling, B pays
 roughly 1 cold-fill per regional hub per window — about 3 globally.
@@ -445,11 +497,123 @@ over a 15-minute window):
 | Per-30s window, users seeing a ~5 s tail        |  ~50             | **~3**          |
 | Per-viewer chance of seeing ≥1 slow render      |  ~3 %            | **~0.2 %**     |
 
-So B wins on the **distribution** of slow renders, not their
-**depth**. Anyone hit by a cold-fill on either architecture still
-waits ~5 s; B simply hits ~15× fewer people.
+§3.7 below describes the post-load-test optimizations that further
+collapsed both the depth (now ~3.2 s, not ~5 s, on a true cold
+Python execution) and the breadth (Layer 3 KV serves completed
+games at ~311 ms instead of hitting Python at all).
 
-### 3.7 What this doesn't measure
+### 3.7 Post-load-test optimizations
+
+Two changes landed after the 2026-05-10 load test that materially
+move the cold-path numbers — neither is reflected in the §3.2–3.6
+tables above.
+
+#### Python `/cfb/process` speedups (commit `572dd2e`, 2026-05-10)
+
+Eight orthogonal wins inside the existing Python architecture (no
+sportsdataverse upgrade, no model port), all gated behind the
+snapshot-test suite from perf-plan Day 2:
+
+1. **Reshape split into 5 timing buckets** (`to_dict`, `relayout`,
+   `top_level`, `validate`, `serialize`) — observability, not
+   latency, but the basis for the rest.
+2. **`plays_json.to_dict(orient="records")` replaces `to_json` +
+   `json.loads` round-trip** — saves 200–500 ms on a 200-play game
+   by skipping multi-MB JSON serialize+parse.
+3. **Dropped `np.array(...).tolist()` wraps on 10 top-level
+   fields** — the numpy round-trip was dtype-inference overhead on
+   plain Python lists from sportsdataverse's ESPN scraper. Saves
+   20–80 ms.
+4. **`orjson` replaces `flask.jsonify`** — 2–5× faster on
+   multi-MB nested dicts with numpy scalars. Uses
+   `OPT_SERIALIZE_NUMPY` for common types + a duck-typed default
+   callback for ndarrays.
+5. **Pydantic response validation gated to `VALIDATE_RESPONSE`
+   env var**, off in production. The ajv validator on the Worker
+   side is defense-in-depth; `conftest.py` enables Pydantic for
+   tests so `STRICT_SCHEMA` still gates. Saves 50–150 ms per
+   response in production.
+6. **Brotli level 11 → 4, gzip default → 5.** The consumer is the
+   Worker, not a browser — we don't need maximum compression. Saves
+   100–400 ms of CPU per response.
+7. **In-process TTL cache of serialized bytes**, keyed by
+   `(gameId, request_method)`, 15 s TTL (half of Worker's 30 s
+   in-progress `max-age`), 32-entry max, eviction by oldest
+   expiry. HIT returns sub-millisecond instead of ~5 s. This is
+   the big one for cold-fill storms, SWR refresh duplicates, retry
+   storms, and concurrent prewarms on the same gameId.
+8. **`bad_cols` hoisted to a module-level frozenset**; inline `del`
+   in the relayout loop instead of a separate pop loop per record;
+   non-finite normalization (NaN/Inf/-Inf → None) in the same pass
+   so orjson doesn't raise.
+
+Local A/B (cold pipeline, fixture 401520434):
+
+| Image                              | Cold |  Repeat-within-15 s |
+|------------------------------------|-----:|--------------------:|
+| baseline `slim-coldstart-replay-get` | 2.5–4.6 s | (no in-process cache) |
+| perf `slim-coldstart-perf`           | **3.2 s** | **13–19 ms**          |
+
+The pipeline + box_score (sportsdataverse internals) still dominate
+at ~2.4 s + 0.4 s; everything the fork touches is now under 50 ms
+combined. The TTL cache (#7) means concurrent prewarms or rapid SWR
+refreshes against the same gameId pay the pipeline once, regardless
+of how many PoPs hit at once.
+
+#### KV HTML cache for completed games (commit `6769e28`, 2026-05-11) + 2024/2025 backfill
+
+Layer 3 (described in §2.2 and §2.3): rendered HTML for completed
+games is stored in `LEAGUE_DATA` KV at
+`game-html:v2:<gameId>` with a 1-year TTL. Production smoke
+numbers from deploy day:
+
+| Scenario                                            | TTFB              |
+|-----------------------------------------------------|------------------:|
+| `caches.default` HIT (Layer 1, same PoP)            |             ~30 ms |
+| `caches.default` MISS → KV HIT (Layer 3, any PoP)   |          **311 ms** |
+| `caches.default` MISS → KV MISS → Python (cold)     | 3.2 s (post-572dd2e) |
+
+The cache fills lazily during real traffic, but a separate
+off-repo bulk-backfill script primed KV with the rendered HTML
+for **every completed 2024 and 2025 game**. The user-visible
+effect on backlog browsing:
+
+- A user clicking a completed game from a new PoP — the common
+  case once historic linking and search drive traffic — serves
+  from KV at ~311 ms instead of paying any Python compute.
+- Worker deploys invalidate Layer 1 but not Layer 3. Right after
+  a deploy, every PoP-cold request for a completed game still
+  serves from KV at ~311 ms — no thundering-herd against Python.
+- The Layer 2 tiered cache's 30-second TTL is now irrelevant for
+  completed games: Layer 3's 1-year TTL takes the request before
+  it can fall through to Layer 2. Layer 2 stays load-bearing for
+  in-progress games during live windows, where Layer 3 correctly
+  doesn't engage.
+- The KV prefix is versioned (`v2` currently — bumped from `v1`
+  in `f163def` when the game template stopped including the
+  duplicate nav-header). Bumping the prefix invalidates the
+  cache instantly without listing/deleting; old entries age out
+  via the TTL.
+
+#### Combined effect on the §3.6 numbers
+
+Re-applying the post-loadtest changes to the cold-path analysis:
+
+|                                                    | A (loadtest)   | B (loadtest) | B (current, post-572dd2e + KV) |
+|----------------------------------------------------|----------------|--------------|--------------------------------|
+| Cold render, completed game, new PoP                | ~5 s           | ~5 s         | **~311 ms** (KV HIT)           |
+| Cold render, in-progress game, new PoP              | ~5 s           | ~5 s         | ~100–200 ms (Layer 2 HIT) |
+| True cold Python execution (no cache at any layer)  | ~5 s           | ~5 s         | **~3.2 s**                     |
+| Concurrent cold fills on same gameId within 15 s    | N pays full    | N pays full  | first pays full, rest **sub-ms** (TTL cache) |
+
+The earlier "B wins on volume, not depth" framing was correct for
+the configuration the load test measured. With Layer 3 plus the
+Python perf pass, B now also wins on depth for the dominant
+backlog-traffic case — completed games served from KV in the low
+hundreds of milliseconds, regardless of which PoP serves the
+request.
+
+### 3.8 What this doesn't measure
 
 - **Mobile end-user latency.** TTFB measurements are server-side
   only. Browser-Reported metrics (LCP, FID, CLS) on a 4G connection
@@ -475,15 +639,38 @@ frontend. Phase 1 closed that wall in-place (gunicorn + caching fixes
 still ~5 s of Python compute per render — and with a per-PoP cache,
 that cost was paid once per PoP per TTL window.
 
-The Cloudflare redesign keeps the Python code unchanged but rebuilds
-the request path around two cache layers: a fast per-PoP HTML cache
-(`caches.default`) for warm-path TTFB in the tens of milliseconds,
-and a Smart Tiered Cache that pools the Python JSON output across
-PoPs to cut cold-fill volume by ~15× at game-day scale. The Phase
-3H proxy-Worker split is the load-bearing detail: without it, the
-tiered cache silently disengages on same-Worker self-fetches.
+The Cloudflare redesign keeps the Python code largely intact but
+rebuilds the request path around three composing cache layers:
 
-The fork doesn't make cold renders faster. It makes them rarer.
+- **Layer 1** (`caches.default`, per-PoP) — warm-path TTFB in the
+  tens of milliseconds.
+- **Layer 2** (CF Smart Tiered Cache, pooled regionally) — cuts
+  cold-fill volume against the Python origin by ~15× at game-day
+  scale; load-bearing for in-progress games during live windows.
+- **Layer 3** (KV-backed HTML, globally replicated, completed
+  games only, primed for the entire 2024/2025 backlog) —
+  serves any cold-PoP visit to an old game at ~311 ms, surviving
+  Worker deploys.
+
+Two post-load-test optimizations (commits `572dd2e` and `6769e28`)
+materially change the cold-path picture the load test originally
+captured:
+
+- True cold Python is now ~3.2 s, not ~5 s.
+- Concurrent cold-fills on the same gameId within 15 s pay the
+  pipeline once at the origin, then serve sub-ms.
+- Completed-game cold-PoP traffic never reaches Python at all —
+  Layer 3 KV intercepts at ~311 ms.
+
+The Phase 3H proxy-Worker split is the load-bearing detail behind
+Layer 2: without it, the tiered cache silently disengages on
+same-Worker self-fetches.
+
+The original "B makes cold renders rarer, not faster" framing
+described the load-test configuration accurately. As of 2026-05-13
+the fork makes them rarer **and** faster: rarer via cross-PoP
+pooling, and faster (or eliminated entirely for the backlog case)
+via the in-process TTL cache and Layer 3 KV.
 
 ---
 
