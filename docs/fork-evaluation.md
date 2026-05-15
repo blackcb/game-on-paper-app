@@ -27,7 +27,8 @@ fork:
    Cache (Phase 3H, 2026-05-13) and serves completed-game HTML
    globally out of KV (Layer 3, 2026-05-11).
 
-This document describes what was wrong, what was built, how the two
+This document describes the original performance challenges with
+the upstream implementation, what was built, how the two
 implementations measure against each other, and what other defects
 the work surfaced along the way.
 
