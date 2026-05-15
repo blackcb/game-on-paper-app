@@ -185,9 +185,11 @@ The end-state ("Architecture B", Phase 3H finalized 2026-05-13):
   Entry: [worker/src/index.tsx](../worker/src/index.tsx).
   Config: [worker/wrangler.toml](../worker/wrangler.toml).
 - **`sports-pythoncontainer`** Cloudflare Container: the same
-  Flask app from upstream, now containerized
-  (`python:3.14-slim` + xgboost-cpu, 84 % image-size reduction
-  from 1.32 GB to 210 MB). Declared as a Durable Object class
+  Flask app from upstream, now containerized and served by
+  `gunicorn -w 2 -k gthread --threads 8 --preload` instead of
+  Flask's dev server (`python/Dockerfile:100`). Image is
+  `python:3.14-slim` + xgboost-cpu, 84 % image-size reduction
+  from 1.32 GB to 210 MB. Declared as a Durable Object class
   in the `sports` Worker.
 - **`sports-summarycontainer`** Cloudflare Container: the Node
   summary service.
@@ -241,8 +243,9 @@ Layer 3, added 2026-05-11 — after the load test.)
    `sports-python-proxy` Worker.
 7. The proxy Worker validates `X-Worker-Secret`, then forwards
    the request to the `PythonContainer` Durable Object.
-8. Flask runs the pipeline; JSON returns up the chain. The tiered
-   cache stores it (30 s TTL on 200s).
+8. The Flask app, served by gunicorn, runs the pipeline; JSON
+   returns up the chain. The tiered cache stores it (30 s TTL
+   on 200s).
 9. The `sports` Worker reshapes the JSON and renders HTML.
 10. After the response, the Worker fires `waitUntil()` to write
     the rendered HTML to KV with a 1-year `expirationTtl`
@@ -340,7 +343,7 @@ duplication.
 
 | Aspect              | Legacy droplet                            | Architecture B                                      |
 |---------------------|-------------------------------------------|-----------------------------------------------------|
-| Python pipeline     | `CFBPlayProcess` in Flask                 | Identical code, in a Cloudflare Container           |
+| Python pipeline     | `CFBPlayProcess` in Flask (dev server)    | Same Flask app under gunicorn (`-w 2 -k gthread --threads 8 --preload`), in a Cloudflare Container |
 | SSR                 | EJS templates in Express                  | Hono JSX in a Cloudflare Worker                     |
 | JSON caching        | Redis instance 2 + Express middleware     | CF standard + Smart Tiered Cache via `fetch+cf`     |
 | HTML caching        | Caddy reverse-proxy headers               | `caches.default` (per-PoP) + KV (global, completed games) |
