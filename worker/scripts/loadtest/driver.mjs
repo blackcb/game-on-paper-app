@@ -212,7 +212,12 @@ async function runViewer({ viewerIndex, target, gameId, runConfig, runStartedAt,
 }
 
 function buildUrl({ target, gameId, runStartedAt, replayDurationSeconds }) {
-  const u = new URL(`/cfb/game/${gameId}`, target.baseUrl);
+  // Path scheme is per-target so the fork's `/cfb/game/:id` and
+  // production's `/game/:id` can be driven from the same harness.
+  // `pathTemplate` uses `{gameId}` as the placeholder; defaults to the
+  // fork route for back-compat with the A/B/D matrix.
+  const template = target.pathTemplate ?? "/cfb/game/{gameId}";
+  const u = new URL(template.replace("{gameId}", gameId), target.baseUrl);
   if (target.replay) {
     u.searchParams.set("replay", String(Math.floor(runStartedAt / 1000)));
     u.searchParams.set("replay_duration", String(replayDurationSeconds));
