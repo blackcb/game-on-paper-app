@@ -4,7 +4,7 @@
 // season starts, bump this in lockstep with the Express constant
 // (eventually both sides should derive it from the date — see the
 // "change after week 4" comment in routes.js).
-export const CURRENT_SEASON = 2025;
+export const CURRENT_SEASON = 2026;
 
 // Minimum supported season. The summary service has no data before
 // this; recursive year-fallback in the Express stack stops here too.

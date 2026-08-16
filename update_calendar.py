@@ -32,7 +32,7 @@ def get_calendar(year: int):
 # Output is read at Worker build time via a TypeScript JSON import in
 # worker/src/lib/schedule.ts.
 result = {}
-for yr in tqdm(range(2002, 2026)):
+for yr in tqdm(range(2002, 2027)):
     result[yr] = get_calendar(yr)
 
 with open("./worker/src/data/schedule.json", "w") as f:
