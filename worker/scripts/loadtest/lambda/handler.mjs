@@ -70,7 +70,29 @@ export const handler = async (event = {}, context) => {
   // into the Lambda env so rotating it doesn't require a redeploy.
   if (event.loadtestToken) config.loadtestToken = event.loadtestToken;
 
-  const result = await runDriver(config, emit);
+  // Hard safety deadline: never let runDriver ride to the Lambda's own
+  // 900s timeout with data unwritten. Race it against runDurationSeconds
+  // + 45s of wind-down margin; whichever wins, `lines` already holds
+  // every metric emitted synchronously, so we write what we have. This
+  // guarantees an S3 object even if some viewers wedge on a hung fetch.
+  const deadlineMs = (config.runDurationSeconds + 45) * 1000;
+  let deadlineTimer;
+  let timedOut = false;
+  console.error(`[handler] ${region}: starting runDriver, deadline ${deadlineMs / 1000}s`);
+  const result = await Promise.race([
+    runDriver(config, emit),
+    new Promise((resolve) => {
+      deadlineTimer = setTimeout(() => {
+        timedOut = true;
+        resolve({ runId: `deadline-${region}`, runStartedAt: 0, runEndedAt: 0 });
+      }, deadlineMs);
+    }),
+  ]);
+  clearTimeout(deadlineTimer);
+  console.error(`[handler] ${region}: runDriver settled timedOut=${timedOut} lines=${lines.length}`);
+  if (timedOut) {
+    emit({ type: "handler_deadline", region, note: "runDriver exceeded runDurationSeconds+45s; wrote partial results" });
+  }
 
   const bucket = event.resultsBucket ?? process.env.LOADTEST_RESULTS_BUCKET;
   const prefix = event.resultsPrefix ?? `runs/${result.runId}`;
@@ -80,6 +102,7 @@ export const handler = async (event = {}, context) => {
     return { runId: result.runId, region, lineCount: lines.length };
   }
   const key = `${prefix}/${region}.jsonl`;
+  console.error(`[handler] ${region}: PUT s3://${bucket}/${key} (${lines.length} lines)`);
   await s3.send(
     new PutObjectCommand({
       Bucket: bucket,
@@ -88,6 +111,7 @@ export const handler = async (event = {}, context) => {
       ContentType: "application/x-ndjson",
     }),
   );
+  console.error(`[handler] ${region}: PUT complete`);
   return {
     runId: result.runId,
     region,

@@ -50,6 +50,14 @@ fi
 # 301-redirects to the apex, so target the apex directly to skip a hop.
 TARGETS_JSON='[{"label":"PROD","baseUrl":"https://gameonpaper.com","arch":null,"replay":false,"pathTemplate":"/game/{gameId}"}]'
 
+# Run length in seconds. Default 600 (not the Lambda-max-adjacent 850):
+# production game pages are ~13.7 MB — ~100x the fork's dynamic pages the
+# harness was originally tuned for — so at 850s the driver didn't wind
+# down before the 900s Lambda timeout and every region died without
+# writing to S3. 600s leaves a wide margin. Override for quick tests,
+# e.g. RUN_DURATION=300.
+RUN_DURATION="${RUN_DURATION:-600}"
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${HERE}"
 BUCKET="$(terraform output -raw results_bucket)"
@@ -62,54 +70,77 @@ PAYLOAD=$(jq -nc \
   --arg token "${LOADTEST_TOKEN:-}" \
   --argjson targets "${TARGETS_JSON}" \
   --argjson gameIds "${GAME_IDS_JSON}" \
+  --argjson dur "${RUN_DURATION}" \
   '{
     viewerCount: 17,
-    runDurationSeconds: 850,
+    runDurationSeconds: $dur,
     cyclePeriodSeconds: 30,
     cycleJitterSeconds: 5,
-    replayDurationSeconds: 850,
+    replayDurationSeconds: $dur,
     targets: $targets,
     gameIds: $gameIds,
     resultsBucket: $bucket,
     resultsPrefix: $prefix,
-    loadtestToken: ($token | select(. != ""))
+    loadtestToken: (if $token == "" then null else $token end)
   }')
 
-echo "Run tag: ${RUN_TAG}"
-echo "Target:  https://www.gameonpaper.com (PROD, no replay)"
-echo "Games:   ${GAME_IDS_JSON}"
-echo "Bucket:  s3://${BUCKET}/runs/${RUN_TAG}"
-echo "Regions: ${REGIONS}"
+# NOTE: the value MUST always be produced. The original form
+# `($token | select(. != ""))` yields EMPTY when the token is empty, and
+# in jq an empty field value collapses the WHOLE object to empty output —
+# so an empty LOADTEST_TOKEN silently produced a blank payload, the
+# Lambda ran on all-defaults (runDurationSeconds 1500 → 900s timeout),
+# and every run died with no results. `if/else` always yields a value.
+# (run.sh has the same latent bug; it only dodged it because the A/B/D
+# runs always set a token.)
+
+echo "Run tag:  ${RUN_TAG}"
+echo "Target:   https://gameonpaper.com (PROD, no replay)"
+echo "Games:    ${GAME_IDS_JSON}"
+echo "Duration: ${RUN_DURATION}s"
+echo "Bucket:   s3://${BUCKET}/runs/${RUN_TAG}"
+echo "Regions:  ${REGIONS}"
 echo
 
-PIDS=()
+# ASYNC dispatch. `--invocation-type Event` hands each Lambda off to
+# AWS and returns immediately (HTTP 202) — the client does NOT stay
+# connected for the ~14 min run. This is deliberate: a synchronous
+# (RequestResponse) invoke requires the caller to block for the whole
+# run, which fails under any 2-minute-capped shell (e.g. Claude Code's
+# `!` runner kills it and the invocations may never dispatch). Async
+# means the Lambdas run detached and PUT their own results to S3 at the
+# end; we poll S3 rather than wait on the client.
+#
+# Trade-off: no synchronous per-region result echo, and a Lambda that
+# errors is auto-retried up to 2x by AWS (async default) — check S3 /
+# CloudWatch if a region's file never appears.
+EXIT=0
 for REGION in ${REGIONS}; do
-  (
-    OUT=$(mktemp)
-    set -e
-    aws lambda invoke \
+  OUT=$(mktemp)
+  if aws lambda invoke \
       --region "${REGION}" \
       --function-name "${FUNCTION_NAME}" \
-      --invocation-type RequestResponse \
+      --invocation-type Event \
       --cli-binary-format raw-in-base64-out \
-      --cli-read-timeout 0 \
       --cli-connect-timeout 60 \
       --payload "${PAYLOAD}" \
-      "${OUT}" >/dev/null
-    echo "[${REGION}] $(cat "${OUT}")"
-    rm -f "${OUT}"
-  ) &
-  PIDS+=($!)
+      "${OUT}" >/dev/null 2>&1; then
+    echo "[${REGION}] dispatched (async)"
+  else
+    echo "[${REGION}] DISPATCH FAILED" >&2
+    EXIT=1
+  fi
+  rm -f "${OUT}"
 done
 
-EXIT=0
-for PID in "${PIDS[@]}"; do
-  wait "${PID}" || EXIT=$?
-done
-
+echo
 if [[ "${EXIT}" -eq 0 ]]; then
-  echo
-  echo "All regions complete. Pull results with:"
-  echo "  aws s3 sync s3://${BUCKET}/runs/${RUN_TAG}/ ../results/${RUN_TAG}/"
+  echo "All 5 regions dispatched. They run ~${RUN_DURATION}s, then write to S3."
+else
+  echo "One or more regions failed to dispatch — see above." >&2
 fi
+echo
+echo "Poll for completion (expect ${RUN_TAG} to fill with 5 .jsonl files):"
+echo "  aws s3 ls s3://${BUCKET}/runs/${RUN_TAG}/"
+echo "Then pull + analyze:"
+echo "  aws s3 sync s3://${BUCKET}/runs/${RUN_TAG}/ ../results/${RUN_TAG}/"
 exit "${EXIT}"

@@ -282,6 +282,36 @@ resource "aws_lambda_function" "driver_ca_central_1" {
   }
 }
 
+// Async (Event) invocation auto-retries FAILED invocations up to 2x by
+// default. A run that hangs to the Lambda timeout counts as a failure,
+// so every bad run spawns 2 more 900s zombies hammering production and
+// muddying the logs. Force 0 retries + a short event age so a failed
+// async invoke dies cleanly instead of multiplying.
+resource "aws_lambda_function_event_invoke_config" "driver_us_east_1" {
+  function_name          = aws_lambda_function.driver_us_east_1.function_name
+  maximum_retry_attempts = 0
+}
+resource "aws_lambda_function_event_invoke_config" "driver_us_east_2" {
+  provider               = aws.us_east_2
+  function_name          = aws_lambda_function.driver_us_east_2.function_name
+  maximum_retry_attempts = 0
+}
+resource "aws_lambda_function_event_invoke_config" "driver_us_west_1" {
+  provider               = aws.us_west_1
+  function_name          = aws_lambda_function.driver_us_west_1.function_name
+  maximum_retry_attempts = 0
+}
+resource "aws_lambda_function_event_invoke_config" "driver_us_west_2" {
+  provider               = aws.us_west_2
+  function_name          = aws_lambda_function.driver_us_west_2.function_name
+  maximum_retry_attempts = 0
+}
+resource "aws_lambda_function_event_invoke_config" "driver_ca_central_1" {
+  provider               = aws.ca_central_1
+  function_name          = aws_lambda_function.driver_ca_central_1.function_name
+  maximum_retry_attempts = 0
+}
+
 output "results_bucket" {
   value = aws_s3_bucket.results.id
 }

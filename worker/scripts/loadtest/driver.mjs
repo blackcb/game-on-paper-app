@@ -119,14 +119,31 @@ async function probe({ url, requestStart, signal, extraHeaders }) {
     },
   });
   const tHeadersHr = process.hrtime.bigint();
-  const buf = await res.arrayBuffer();
+
+  // Cancel the body immediately — do NOT read any of it. Production game
+  // pages are ~13.7 MB; the metric that matters for a CDN cache
+  // benchmark is TTFB (time to headers), captured above. We must not
+  // even sample a prefix: initiating a read makes undici consume the
+  // stream and send HTTP/2 window updates, which lets the server flood
+  // MBs of read-ahead per stream. With N viewers multiplexed on one H2
+  // connection that read-ahead saturates the shared connection and
+  // delays the HEADERS frames of concurrent requests, inflating their
+  // TTFB (observed: 9-12s TTFB when sampling 4 KB across 3 viewers).
+  // Cancelling right after headers RSTs the stream before meaningful
+  // read-ahead. Downside: no body hash — meaningless for the static
+  // production page anyway (it doesn't change like the fork's SWR body).
+  // Fire-and-forget: do NOT await. On a wedged H2 stream, cancel()'s
+  // promise can hang indefinitely, and nothing bounds it — awaiting it
+  // wedged whole runs to the 900s Lambda timeout. We only need the RST
+  // sent; the promise result is irrelevant.
+  void res.body?.cancel().catch(() => {});
   const tBodyHr = process.hrtime.bigint();
 
   const ttfbMs = Number(tHeadersHr - tHr) / 1e6;
   const totalMs = Number(tBodyHr - tHr) / 1e6;
-  const bodyLen = buf.byteLength;
-  const slice = new Uint8Array(buf, 0, Math.min(bodyLen, DEFAULT_CONFIG.bodyHashBytes));
-  const bodyHashShort = crypto.createHash("sha1").update(slice).digest("hex").slice(0, 12);
+  const bodyHashShort = null;
+  const contentLength = Number(res.headers.get("content-length"));
+  const bodyLen = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : null;
 
   return {
     request_start_ms: t0,
@@ -172,8 +189,22 @@ async function runViewer({ viewerIndex, target, gameId, runConfig, runStartedAt,
     const url = buildUrl({ target, gameId, runStartedAt, replayDurationSeconds });
     const ac = new AbortController();
     const timeout = setTimeout(() => ac.abort(), perViewerTimeoutMs);
+    // Hard wall-clock guarantee: the await below ALWAYS settles within
+    // perViewerTimeoutMs + 2s, even if undici ignores the abort signal
+    // (H2 abort handling is unreliable under concurrency). Without this,
+    // one wedged fetch hangs a viewer forever, so Promise.allSettled
+    // never resolves and the whole run rides to the 900s Lambda timeout
+    // with no results written. A lost race abandons the in-flight probe
+    // (its fetch is already ac.abort()ed) and records a request_error.
+    let hardTimer;
+    const hardTimeout = new Promise((_, reject) => {
+      hardTimer = setTimeout(() => reject(new Error(`hard-timeout ${perViewerTimeoutMs + 2000}ms`)), perViewerTimeoutMs + 2000);
+    });
     try {
-      const result = await probe({ url, requestStart: runStartedAt, signal: ac.signal, extraHeaders });
+      const result = await Promise.race([
+        probe({ url, requestStart: runStartedAt, signal: ac.signal, extraHeaders }),
+        hardTimeout,
+      ]);
       emit({
         type: "request",
         region,
@@ -198,6 +229,7 @@ async function runViewer({ viewerIndex, target, gameId, runConfig, runStartedAt,
       });
     } finally {
       clearTimeout(timeout);
+      clearTimeout(hardTimer);
     }
     cycle += 1;
 
@@ -255,6 +287,13 @@ export async function runDriver(userConfig = {}, emitFn) {
     game_ids: config.gameIds,
   });
 
+  // Debug instrumentation (console.error → CloudWatch). The emit() JSONL
+  // goes to an in-memory buffer, so without these the Lambda logs show
+  // only START/REPORT and we can't see where a run wedges.
+  const dbg = (m) => console.error(`[driver] ${config.region}: ${m}`);
+  dbg(`run_start viewers=${config.viewerCount} duration=${config.runDurationSeconds}s`);
+
+  let settled = 0;
   const viewers = [];
   for (let i = 0; i < config.viewerCount; i++) {
     const target = config.targets[i % config.targets.length];
@@ -267,10 +306,14 @@ export async function runDriver(userConfig = {}, emitFn) {
         runConfig: config,
         runStartedAt,
         emit,
+      }).finally(() => {
+        settled += 1;
+        if (settled % 5 === 0 || settled === config.viewerCount) dbg(`${settled}/${config.viewerCount} viewers done`);
       }),
     );
   }
   await Promise.allSettled(viewers);
+  dbg(`all viewers settled`);
 
   emit({
     type: "run_end",
