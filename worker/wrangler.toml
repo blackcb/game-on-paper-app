@@ -22,6 +22,16 @@ compatibility_flags = ["nodejs_compat"]
 # Local dev defaults. `wrangler dev` listens on 8787 by default; pin
 # it so the Playwright suite (perf-plan Day 3) can target a known
 # port without env wiring.
+# 2026-08-16 redeploy: the production hostname was previously attached
+# out-of-band in the dashboard as a Workers custom domain, which the
+# 2026-07-22 teardown deleted along with its auto-managed DNS record.
+# Declaring it here makes redeploys self-healing — wrangler recreates
+# the DNS record + cert if they're missing. (Top-level key: must stay
+# above the first [table] header or TOML scopes it into that table.)
+routes = [
+  { pattern = "sports.unseen-university.org", custom_domain = true }
+]
+
 [dev]
 port = 8787
 
@@ -63,11 +73,11 @@ directory = "./public"
 # data, so update in place if the binding name ever changes.
 [[kv_namespaces]]
 binding = "LEAGUE_DATA"
-id = "649602a55c7048c5ba433bdece6ba731"
+id = "755cb1c41dcb4183bd02858902e43637"
 
 [[kv_namespaces]]
 binding = "SUMMARY_LAST_UPDATED"
-id = "564be97a4ca8419a9ccdc8b0be0f1c3d"
+id = "bb78432b35704d508fc66b0e1fc2a102"
 
 # Python service URL for /cfb/process. Sub-phase 2H exposes Python
 # publicly via Caddy on the droplet at https://python.unseen-university.org,

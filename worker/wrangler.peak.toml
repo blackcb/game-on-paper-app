@@ -23,6 +23,10 @@ account_id = "ebe521cb5b561683303b77d32e240ba4"
 compatibility_date = "2026-05-02"
 compatibility_flags = ["nodejs_compat"]
 
+routes = [
+  { pattern = "sports.unseen-university.org", custom_domain = true }
+]
+
 [dev]
 port = 8787
 
@@ -34,11 +38,11 @@ directory = "./public"
 
 [[kv_namespaces]]
 binding = "LEAGUE_DATA"
-id = "649602a55c7048c5ba433bdece6ba731"
+id = "755cb1c41dcb4183bd02858902e43637"
 
 [[kv_namespaces]]
 binding = "SUMMARY_LAST_UPDATED"
-id = "564be97a4ca8419a9ccdc8b0be0f1c3d"
+id = "bb78432b35704d508fc66b0e1fc2a102"
 
 [observability]
 enabled = true

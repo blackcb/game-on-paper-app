@@ -18,6 +18,19 @@ account_id = "ebe521cb5b561683303b77d32e240ba4"
 compatibility_date = "2026-05-02"
 compatibility_flags = ["nodejs_compat"]
 
+# Production hostname. Historically attached out-of-band in the
+# dashboard (the Phase 3H cutover moved it here from the `sports`
+# Worker, and during that transition file-state route ownership was
+# dangerous). The 2026-07-22 teardown deleted the domain attachment
+# and its DNS record; post-teardown this Worker is the sole correct
+# owner, so the domain is declared here — wrangler recreates the
+# DNS record + cert on deploy. The Phase 3G invariant still applies:
+# this hostname must NEVER point at the `sports` Worker itself or
+# fetch+cf cache pooling silently dies.
+routes = [
+  { pattern = "python.unseen-university.org", custom_domain = true }
+]
+
 [observability]
 enabled = true
 head_sampling_rate = 1
@@ -32,9 +45,3 @@ name = "PYTHON_CONTAINER"
 class_name = "PythonContainer"
 script_name = "sports"
 
-# Production route is attached out-of-band by the `python.unseen-university.org/*`
-# Cloudflare Route (currently pointed at the `sports` Worker; moved
-# here as part of Phase 3H cutover). Not declared here because route
-# ownership is a dashboard concern and we don't want a stray
-# `wrangler deploy --config python-proxy/wrangler.toml` to repoint
-# the route based on file state.
