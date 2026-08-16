@@ -1,0 +1,69 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LambdaManageThisFunction",
+      "Effect": "Allow",
+      "Action": "lambda:*",
+      "Resource": "arn:aws:lambda:*:*:function:gameonpaper-loadtest-driver"
+    },
+    {
+      "Sid": "LambdaListAndAccount",
+      "Effect": "Allow",
+      "Action": ["lambda:ListFunctions", "lambda:GetAccountSettings"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IamRoleAndPolicyForThisHarness",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:UpdateRole",
+        "iam:UpdateAssumeRolePolicy", "iam:PassRole", "iam:TagRole", "iam:UntagRole",
+        "iam:ListRoleTags", "iam:ListInstanceProfilesForRole",
+        "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies", "iam:GetRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy",
+        "iam:CreatePolicy", "iam:DeletePolicy", "iam:GetPolicy", "iam:GetPolicyVersion",
+        "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:ListPolicyVersions",
+        "iam:ListEntitiesForPolicy", "iam:TagPolicy", "iam:UntagPolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/gameonpaper-loadtest-driver",
+        "arn:aws:iam::*:policy/gameonpaper-loadtest-s3-put"
+      ]
+    },
+    {
+      "Sid": "S3ResultsBucket",
+      "Effect": "Allow",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::gameonpaper-loadtest-results",
+        "arn:aws:s3:::gameonpaper-loadtest-results/*"
+      ]
+    },
+    {
+      "Sid": "S3ListAllBuckets",
+      "Effect": "Allow",
+      "Action": "s3:ListAllMyBuckets",
+      "Resource": "*"
+    },
+    {
+      "Sid": "LogsForThisFunction",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy",
+        "logs:TagResource", "logs:DescribeLogGroups", "logs:DescribeLogStreams",
+        "logs:FilterLogEvents", "logs:GetLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/gameonpaper-loadtest-driver*"
+    },
+    {
+      "Sid": "ObservabilityReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:GetMetricStatistics", "cloudwatch:ListMetrics",
+        "logs:DescribeLogGroups", "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
