@@ -4,6 +4,7 @@
 // into the worker (~75KB schedule + ~2KB groups; trivial).
 
 import scheduleJson from "../data/schedule.json";
+import { espnFetch } from "./espn_fetch";
 import groupsJson from "../data/groups.json";
 import type { ScheduleEvent } from "./team_helpers";
 
@@ -54,13 +55,22 @@ export function getGroups(): GroupEntry[] {
 // endpoint, which is what /cfb/ uses.
 async function fetchCurrentScoreboard(group: number | string): Promise<ScheduleEvent[]> {
   const espnGroup = parseInt(String(group), 10) < 0 ? 80 : group;
-  const url = `https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=${espnGroup}&size=100000`;
-  const res = await fetch(url);
+  // 2026-08-16: switched from site.api.espn.com to the cdn.espn.com
+  // core scoreboard. site.api 403s Workers-egress fetches even with a
+  // browser UA (verified via espn_scoreboard_failure in Workers Logs),
+  // while the cdn.espn.com family accepts them — the same conclusion
+  // upstream reached (their getCurrentScoreboard hits this exact URL,
+  // credit @pseudo-r's Public-ESPN-API notes). Payload nests the old
+  // response under content.sbData.
+  const url = `https://cdn.espn.com/core/college-football/scoreboard?groups=${espnGroup}&size=1000&xhr=1`;
+  const res = await espnFetch(url);
   if (!res.ok) {
     throw new Error(`ESPN scoreboard returned ${res.status}`);
   }
-  const data = (await res.json()) as { events?: ScheduleEvent[] };
-  return data.events ?? [];
+  const data = (await res.json()) as {
+    content?: { sbData?: { events?: ScheduleEvent[] } };
+  };
+  return data.content?.sbData?.events ?? [];
 }
 
 // Sub-phase 2F: cron-warmed scoreboard.
@@ -160,7 +170,7 @@ async function fetchHistoricalSchedule(
     userab: "18",
   });
   const url = `https://cdn.espn.com/core/college-football/schedule?${params.toString()}`;
-  const res = await fetch(url);
+  const res = await espnFetch(url);
   if (!res.ok) {
     throw new Error(`ESPN schedule returned ${res.status}`);
   }

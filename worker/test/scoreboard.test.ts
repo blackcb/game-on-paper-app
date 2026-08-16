@@ -184,7 +184,7 @@ describe("/cfb/ scoreboard route", () => {
 
   it("renders the scoreboard with chrome, dropdowns, and game cards", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResponse({ events: [sampleGame()] }),
+      jsonResponse({ content: { sbData: { events: [sampleGame()] } } }),
     );
     const res = await SELF.fetch("http://localhost/cfb/");
     expect(res.status).toBe(200);
@@ -210,7 +210,7 @@ describe("/cfb/ scoreboard route", () => {
     // substring — the inline formatter's comment legitimately
     // mentions the old filenames.
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResponse({ events: [sampleGame()] }),
+      jsonResponse({ content: { sbData: { events: [sampleGame()] } } }),
     );
     const res = await SELF.fetch("http://localhost/cfb/");
     const body = await res.text();
@@ -227,7 +227,7 @@ describe("/cfb/ scoreboard route", () => {
     // `id="inputGameId"` (invalid HTML). Guard against re-introducing
     // either.
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResponse({ events: [sampleGame()] }),
+      jsonResponse({ content: { sbData: { events: [sampleGame()] } } }),
     );
     const res = await SELF.fetch("http://localhost/cfb/");
     const body = await res.text();
@@ -245,7 +245,7 @@ describe("/cfb/ scoreboard route", () => {
     // (3) only one upstream KV/ESPN call happens across both hits.
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
-      .mockImplementation(async () => jsonResponse({ events: [sampleGame()] }));
+      .mockImplementation(async () => jsonResponse({ content: { sbData: { events: [sampleGame()] } } }));
     const url = "http://localhost/cfb/";
     const r1 = await SELF.fetch(url);
     expect(r1.status).toBe(200);
@@ -270,13 +270,13 @@ describe("/cfb/ scoreboard route", () => {
     // 30 s TTL + 60 s SWR keeps most repeats in the instant-serve
     // SWR window without ever serving wildly-stale lines.
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResponse({
+      jsonResponse({ content: { sbData: {
         events: [
           sampleGame({
             status: { type: { name: "STATUS_IN_PROGRESS", completed: false, detail: "Q2" }, period: 2 },
           }),
         ],
-      }),
+        } } }),
     );
     const res = await SELF.fetch("http://localhost/cfb/");
     expect(res.headers.get("cache-control")).toContain("max-age=30");
@@ -293,8 +293,8 @@ describe("/cfb/ scoreboard route", () => {
     // write-through (which would persist the empty result across
     // both fetches via KV, not the HTML cache we're testing).
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    fetchSpy.mockImplementationOnce(async () => jsonResponse({ events: [] }));
-    fetchSpy.mockImplementation(async () => jsonResponse({ events: [sampleGame()] }));
+    fetchSpy.mockImplementationOnce(async () => jsonResponse({ content: { sbData: { events: [] } } }));
+    fetchSpy.mockImplementation(async () => jsonResponse({ content: { sbData: { events: [sampleGame()] } } }));
     const url = "http://localhost/cfb/?group=8";
     const r1 = await SELF.fetch(url);
     expect(r1.headers.get("cache-control")).toContain("no-store");
@@ -307,19 +307,19 @@ describe("/cfb/ scoreboard route", () => {
   });
 
   it("shows 'No games scheduled' when ESPN returns an empty event list", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({ events: [] }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({ content: { sbData: { events: [] } } }));
     const res = await SELF.fetch("http://localhost/cfb/");
     const body = await res.text();
     expect(body).toContain("No games scheduled.");
   });
 
-  it("hits the site.api scoreboard endpoint with the requested group", async () => {
+  it("hits the cdn.espn.com core scoreboard endpoint with the requested group", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
-      .mockImplementation(async () => jsonResponse({ events: [] }));
+      .mockImplementation(async () => jsonResponse({ content: { sbData: { events: [] } } }));
     await SELF.fetch("http://localhost/cfb/?group=8");
     const url = String(fetchSpy.mock.calls[0]![0]);
-    expect(url).toContain("site.api.espn.com");
+    expect(url).toContain("cdn.espn.com/core/college-football/scoreboard");
     expect(url).toContain("scoreboard");
     expect(url).toContain("groups=8");
   });
@@ -354,7 +354,7 @@ describe("/cfb/ scoreboard route", () => {
     });
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
-      .mockImplementation(async () => jsonResponse({ events: [ranked, unranked] }));
+      .mockImplementation(async () => jsonResponse({ content: { sbData: { events: [ranked, unranked] } } }));
     const res = await SELF.fetch("http://localhost/cfb/?group=-1");
     expect(res.status).toBe(200);
     // Coerces -1 → 80 at the URL.
@@ -392,15 +392,15 @@ describe("sub-phase 2F: cron-warmed scoreboard helpers", () => {
   });
 
   describe("writeCurrentScoreboard", () => {
-    it("calls the ESPN site-API scoreboard endpoint and writes the events to KV", async () => {
+    it("calls the ESPN cdn core scoreboard endpoint and writes the events to KV", async () => {
       const games = [sampleGame()];
       const fetchSpy = vi
         .spyOn(globalThis, "fetch")
-        .mockImplementation(async () => jsonResponse({ events: games }));
+        .mockImplementation(async () => jsonResponse({ content: { sbData: { events: games } } }));
       const count = await writeCurrentScoreboard(env.LEAGUE_DATA);
       expect(count).toBe(1);
       const url = String(fetchSpy.mock.calls[0]![0]);
-      expect(url).toContain("site.api.espn.com");
+      expect(url).toContain("cdn.espn.com/core/college-football/scoreboard");
       expect(url).toContain("groups=80");
       const cached = await env.LEAGUE_DATA.get("cfb-scoreboard-80");
       expect(cached).not.toBeNull();
@@ -431,7 +431,7 @@ describe("sub-phase 2F: cron-warmed scoreboard helpers", () => {
 
     it("falls back to ESPN on KV miss and writes through", async () => {
       vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-        jsonResponse({ events: [sampleGame({ id: "from-espn" })] }),
+        jsonResponse({ content: { sbData: { events: [sampleGame({ id: "from-espn" })] } } }),
       );
       const games = await getCachedCurrentScoreboard(env.LEAGUE_DATA);
       expect(games[0].id).toBe("from-espn");

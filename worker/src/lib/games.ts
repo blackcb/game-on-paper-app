@@ -1,4 +1,5 @@
 import type { BackendFetch } from "./backends";
+import { espnFetch } from "./espn_fetch";
 import { logSchemaFailure, validateProcessResponse } from "./schema";
 
 // Replaces frontend/cfb/games.js. Per-game PBP retrieval: calls the
@@ -477,7 +478,7 @@ interface EspnPbpEnvelope {
 
 export async function probeEspnPbp(gameId: string | number): Promise<EspnPbpEnvelope> {
   const url = `http://cdn.espn.com/core/college-football/playbyplay?gameId=${gameId}&xhr=1&render=false&userab=18`;
-  const res = await fetch(url);
+  const res = await espnFetch(url);
   if (!res.ok) {
     throw new Error(`ESPN PBP probe returned ${res.status}`);
   }

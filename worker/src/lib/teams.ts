@@ -4,6 +4,8 @@
 //   - site.api.espn.com (schedule by season type)
 // Both are public, no auth needed.
 
+import { espnFetch } from "./espn_fetch";
+
 const ESPN_CORE = "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football";
 const ESPN_SITE = "https://site.api.espn.com/apis/site/v2/sports/football/college-football";
 
@@ -16,7 +18,7 @@ async function populate(
   const seasonStr = season != null ? `/seasons/${season}` : "";
   const seasonType = type != null ? `/types/${type}` : "";
   const url = `${ESPN_CORE}${seasonStr}${seasonType}/teams/${teamId}/${endpoint}?lang=en&region=us`;
-  const response = await fetch(url);
+  const response = await espnFetch(url);
   if (!response.ok) {
     throw new Error(`ESPN ${endpoint || "team"} returned ${response.status}`);
   }
@@ -98,7 +100,7 @@ export async function getTeamSeasonInformation(
   const schedulePromises = [2, 3].map((seasonType) => {
     const params = new URLSearchParams({ seasontype: String(seasonType) });
     if (season) params.append("season", String(season));
-    return fetch(`${ESPN_SITE}/teams/${teamId}/schedule?${params}`).then((r) => {
+    return espnFetch(`${ESPN_SITE}/teams/${teamId}/schedule?${params}`).then((r) => {
       if (!r.ok) throw new Error(`ESPN schedule type ${seasonType} returned ${r.status}`);
       return r.json() as Promise<{ events?: Record<string, ScheduleEvent> }>;
     }).catch((err) => {

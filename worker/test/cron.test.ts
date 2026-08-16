@@ -105,8 +105,8 @@ describe("prewarmTopGames", () => {
     await clearScoreboard();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = typeof input === "string" ? input : (input as Request).url;
-      if (url.includes("site.api.espn.com")) {
-        return new Response(JSON.stringify({ events: [] }), {
+      if (url.includes("cdn.espn.com/core/college-football/scoreboard")) {
+        return new Response(JSON.stringify({ content: { sbData: { events: [] } } }), {
           headers: { "content-type": "application/json" },
         });
       }
@@ -119,7 +119,7 @@ describe("prewarmTopGames", () => {
     });
     // ESPN scoreboard fetch happened (1 call); no prewarmOne calls.
     expect(fetchSpy.mock.calls.length).toBe(1);
-    expect(String(fetchSpy.mock.calls[0]![0])).toContain("site.api.espn.com");
+    expect(String(fetchSpy.mock.calls[0]![0])).toContain("cdn.espn.com/core/college-football/scoreboard");
   });
 
   it("self-fetches /cfb/game/:id for the top N games", async () => {
