@@ -1,4 +1,5 @@
 import type { Child, FC } from "hono/jsx";
+import { CURRENT_SEASON, MIN_SEASON } from "../lib/season";
 
 // Page chrome shared by every route — reproduces the four EJS partials
 // (head.ejs, nav-header.ejs, footer.ejs, scripts.ejs) as a single JSX
@@ -33,7 +34,13 @@ interface LayoutProps {
   children?: Child;
 }
 
-const SEASONS = Array.from({ length: 2025 - 2014 + 1 }, (_, i) => 2014 + i);
+// Nav season list. MIN_SEASON floor (summary data starts 2014), and
+// derive the ceiling from CURRENT_SEASON — the 2026 bump found this
+// literal drifting alongside Scoreboard.tsx's YEAR_RANGE_END.
+const SEASONS = Array.from(
+  { length: CURRENT_SEASON - MIN_SEASON + 1 },
+  (_, i) => MIN_SEASON + i,
+);
 
 export const Layout: FC<LayoutProps> = ({
   title,

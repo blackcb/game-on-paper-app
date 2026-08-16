@@ -3,6 +3,7 @@ import { Layout } from "./Layout";
 import { GameThumb } from "./GameThumb";
 import type { GroupEntry, WeekEntry } from "../lib/schedule";
 import type { ScheduleEvent } from "../lib/team_helpers";
+import { CURRENT_SEASON } from "../lib/season";
 
 // Reproduces frontend/views/pages/cfb/index.ejs. Used by all three
 // scoreboard-shaped routes: /cfb/, /cfb/year/:year, and
@@ -21,9 +22,12 @@ interface Props {
   hasActiveGames: boolean;
 }
 
-// Years offered in the season dropdown — matches index.ejs:54
-// (`range(2002, 2025)` reversed).
-const YEAR_RANGE_END = 2025;
+// Years offered in the season dropdown. Derived from CURRENT_SEASON
+// (2026 bump exposed that the ported index.ejs literal here drifted
+// from lib/season.ts — one bump, two constants). 2002 floor matches
+// index.ejs:54 and the schedule.json coverage, which starts earlier
+// than MIN_SEASON's summary-data floor.
+const YEAR_RANGE_END = CURRENT_SEASON;
 const YEAR_RANGE_START = 2002;
 
 export const ScoreboardPage: FC<Props> = ({
