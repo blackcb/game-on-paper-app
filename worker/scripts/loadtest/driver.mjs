@@ -88,6 +88,15 @@ export const DEFAULT_CONFIG = {
   // Lambda invocation payload — never bake the literal token into
   // the image.
   loadtestToken: process.env.LOADTEST_TOKEN ?? null,
+  // Cache-buster mode. When true, every request gets a unique `_cb=`
+  // query param so Cloudflare treats it as a distinct cache key —
+  // forcing a MISS and making the ORIGIN generate the page. This
+  // measures the origin/miss path instead of the edge/HIT path.
+  // DANGEROUS at concurrency: each miss is a full (~8s) origin
+  // generation, so N viewers = N concurrent origin runs. Keep viewer
+  // count and rate low, and only run against a target you're allowed
+  // to load the origin of. Off by default.
+  cacheBust: false,
   // Body-hash window size. The first 4 KB of HTML/JSON is enough to
   // detect content-version changes (PBP plays array start, status
   // block, etc.) without storing 200+ KB hashes per request.
@@ -174,7 +183,7 @@ async function probe({ url, requestStart, signal, extraHeaders }) {
 // ----- single viewer loop -----
 
 async function runViewer({ viewerIndex, target, gameId, runConfig, runStartedAt, emit }) {
-  const { cyclePeriodSeconds, cycleJitterSeconds, perViewerTimeoutMs, runDurationSeconds, replayDurationSeconds, region, loadtestToken } = runConfig;
+  const { cyclePeriodSeconds, cycleJitterSeconds, perViewerTimeoutMs, runDurationSeconds, replayDurationSeconds, region, loadtestToken, cacheBust } = runConfig;
   const extraHeaders = loadtestToken ? { "X-Loadtest-Token": loadtestToken } : undefined;
   const runEndsAt = runStartedAt + runDurationSeconds * 1000;
   let cycle = 0;
@@ -186,7 +195,7 @@ async function runViewer({ viewerIndex, target, gameId, runConfig, runStartedAt,
   await sleep(stagger);
 
   while (Date.now() < runEndsAt) {
-    const url = buildUrl({ target, gameId, runStartedAt, replayDurationSeconds });
+    const url = buildUrl({ target, gameId, runStartedAt, replayDurationSeconds, cacheBust });
     const ac = new AbortController();
     const timeout = setTimeout(() => ac.abort(), perViewerTimeoutMs);
     // Hard wall-clock guarantee: the await below ALWAYS settles within
@@ -243,7 +252,7 @@ async function runViewer({ viewerIndex, target, gameId, runConfig, runStartedAt,
   }
 }
 
-function buildUrl({ target, gameId, runStartedAt, replayDurationSeconds }) {
+function buildUrl({ target, gameId, runStartedAt, replayDurationSeconds, cacheBust }) {
   // Path scheme is per-target so the fork's `/cfb/game/:id` and
   // production's `/game/:id` can be driven from the same harness.
   // `pathTemplate` uses `{gameId}` as the placeholder; defaults to the
@@ -256,6 +265,12 @@ function buildUrl({ target, gameId, runStartedAt, replayDurationSeconds }) {
   }
   if (target.arch) {
     u.searchParams.set("arch", target.arch);
+  }
+  // Cache-buster: a unique key per request forces a distinct Cloudflare
+  // cache entry → MISS → origin generation. Uniqueness must survive
+  // same-millisecond concurrency, hence the random suffix.
+  if (cacheBust) {
+    u.searchParams.set("_cb", `${Date.now()}-${crypto.randomBytes(5).toString("hex")}`);
   }
   return u.toString();
 }
@@ -283,6 +298,7 @@ export async function runDriver(userConfig = {}, emitFn) {
     duration_s: config.runDurationSeconds,
     cycle_period_s: config.cyclePeriodSeconds,
     replay_duration_s: config.replayDurationSeconds,
+    cache_bust: config.cacheBust ?? false,
     targets: config.targets.map((t) => t.label),
     game_ids: config.gameIds,
   });
@@ -347,6 +363,7 @@ if (isCliInvocation) {
   if (cli.replay_duration_s) config.replayDurationSeconds = parseInt(cli.replay_duration_s, 10);
   if (cli.targets) config.targets = cli.targets;
   if (cli.game_ids) config.gameIds = cli.game_ids;
+  if (cli.cache_bust) config.cacheBust = cli.cache_bust === "true" || cli.cache_bust === "1";
 
   runDriver(config).catch((err) => {
     process.stderr.write(`driver crashed: ${err?.stack ?? err}\n`);

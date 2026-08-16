@@ -65,6 +65,7 @@ export const handler = async (event = {}, context) => {
   };
   if (event.targets) config.targets = event.targets;
   if (event.gameIds) config.gameIds = event.gameIds;
+  if (event.cacheBust != null) config.cacheBust = event.cacheBust;
   // Optional Cloudflare WAF bypass token. Pass via the invocation
   // payload (run.sh sets it from a local env var) instead of baking
   // into the Lambda env so rotating it doesn't require a redeploy.

@@ -27,6 +27,19 @@
 # LOADTEST_TOKEN (optional): if the prod Cloudflare zone has a WAF Skip
 # rule keyed on the X-Loadtest-Token header, export the token so the
 # Lambda IPs get through Bot Fight Mode. See README.md.
+#
+# Env knobs:
+#   RUN_DURATION=<s>   run length (default 600)
+#   VIEWERS=<n>        viewers per region (default 17; 2 in cache-bust mode)
+#   CYCLE=<s>          seconds between a viewer's requests (default 30; 60 in cache-bust)
+#   CACHE_BUST=1       force origin MISS on every request — ORIGIN LOAD TEST.
+#                      Each request becomes a full origin generation (~8s on
+#                      gameonpaper.com), so concurrency = origin load. DANGEROUS
+#                      against production; needs the origin owner's sign-off.
+#                      Defaults drop to 2 viewers / 60s cycle when enabled.
+#                      Example (deliberately small):
+#                        CACHE_BUST=1 VIEWERS=1 CYCLE=30 RUN_DURATION=120 \
+#                          bash run-prod.sh 2026-08-30-origin 401762841
 
 set -euo pipefail
 
@@ -58,11 +71,28 @@ TARGETS_JSON='[{"label":"PROD","baseUrl":"https://gameonpaper.com","arch":null,"
 # e.g. RUN_DURATION=300.
 RUN_DURATION="${RUN_DURATION:-600}"
 
+# CACHE_BUST mode. When enabled, every request carries a unique query
+# param so it's a distinct Cloudflare cache key → MISS → the ORIGIN
+# generates the page. This tests the origin/miss path (measured ~8s per
+# generation on gameonpaper.com) instead of the edge/HIT path.
+#
+# DANGER: each miss is a full origin generation, so concurrency multiplies
+# directly into origin load — VIEWERS × 5 regions simultaneous ~8s runs.
+# That can overwhelm a production origin. Only run against an origin you
+# are authorised to load, with the maintainer's sign-off. When CACHE_BUST
+# is on we default to LOW concurrency (2 viewers) and a SLOW cycle (60s);
+# override VIEWERS / CYCLE deliberately, not by accident.
+case "${CACHE_BUST:-}" in
+  ""|0|false|no) CACHE_BUST_JSON=false; VIEWERS="${VIEWERS:-17}"; CYCLE="${CYCLE:-30}" ;;
+  *)             CACHE_BUST_JSON=true;  VIEWERS="${VIEWERS:-2}";  CYCLE="${CYCLE:-60}" ;;
+esac
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${HERE}"
 BUCKET="$(terraform output -raw results_bucket)"
 FUNCTION_NAME="$(terraform output -raw function_name)"
 REGIONS=$(terraform output -json regions | jq -r '.[]')
+REGION_COUNT=$(echo "${REGIONS}" | wc -w | tr -d ' ')
 
 PAYLOAD=$(jq -nc \
   --arg prefix "runs/${RUN_TAG}" \
@@ -71,12 +101,16 @@ PAYLOAD=$(jq -nc \
   --argjson targets "${TARGETS_JSON}" \
   --argjson gameIds "${GAME_IDS_JSON}" \
   --argjson dur "${RUN_DURATION}" \
+  --argjson viewers "${VIEWERS}" \
+  --argjson cycle "${CYCLE}" \
+  --argjson cachebust "${CACHE_BUST_JSON}" \
   '{
-    viewerCount: 17,
+    viewerCount: $viewers,
     runDurationSeconds: $dur,
-    cyclePeriodSeconds: 30,
+    cyclePeriodSeconds: $cycle,
     cycleJitterSeconds: 5,
     replayDurationSeconds: $dur,
+    cacheBust: $cachebust,
     targets: $targets,
     gameIds: $gameIds,
     resultsBucket: $bucket,
@@ -97,9 +131,27 @@ echo "Run tag:  ${RUN_TAG}"
 echo "Target:   https://gameonpaper.com (PROD, no replay)"
 echo "Games:    ${GAME_IDS_JSON}"
 echo "Duration: ${RUN_DURATION}s"
+echo "Viewers:  ${VIEWERS} per region × ${REGION_COUNT} regions"
+echo "Cycle:    ${CYCLE}s"
+echo "Mode:     $([ "${CACHE_BUST_JSON}" = true ] && echo 'CACHE-BUST → forces origin MISS (origin load test)' || echo 'normal (edge cache)')"
 echo "Bucket:   s3://${BUCKET}/runs/${RUN_TAG}"
 echo "Regions:  ${REGIONS}"
 echo
+
+if [[ "${CACHE_BUST_JSON}" = true ]]; then
+  PEAK=$(( VIEWERS * REGION_COUNT ))
+  echo "  ┌──────────────────────────────────────────────────────────────┐"
+  echo "  │  ⚠  CACHE-BUST MODE — this loads the ORIGIN, not the cache.   │"
+  echo "  │                                                              │"
+  printf '  │  Up to ~%-3s concurrent origin generations (%s viewers × %s    │\n' "${PEAK}" "${VIEWERS}" "${REGION_COUNT}"
+  echo "  │  regions), each ~8s on gameonpaper.com. This can degrade or   │"
+  echo "  │  take down a production origin.                               │"
+  echo "  │                                                              │"
+  echo "  │  Only proceed with the origin owner's sign-off. Raise load    │"
+  echo "  │  with VIEWERS=/CYCLE= deliberately. Ctrl-C now to abort.      │"
+  echo "  └──────────────────────────────────────────────────────────────┘"
+  echo
+fi
 
 # ASYNC dispatch. `--invocation-type Event` hands each Lambda off to
 # AWS and returns immediately (HTTP 202) — the client does NOT stay
